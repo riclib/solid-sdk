@@ -43,7 +43,8 @@ type SolutionPublish struct {
 	SystemPrompt string
 	Version      string
 
-	Tools []contract.ToolDescriptor
+	Tools  []contract.ToolDescriptor
+	Skills []contract.SkillArtifact
 }
 
 // EnsureSolutionsBucket creates-or-gets the solutions announce bucket. Mirrors
@@ -88,6 +89,16 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 			return fmt.Errorf("publish %q: tool %q: %w", p.Name, t.Name, err)
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactTool, ID: t.Name})
+	}
+	for _, sk := range p.Skills {
+		if sk.ID == "" {
+			return fmt.Errorf("publish %q: skill with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactSkill, sk.ID)
+		if err := putLeaf(ctx, kv, key, sk); err != nil {
+			return fmt.Errorf("publish %q: skill %q: %w", p.Name, sk.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactSkill, ID: sk.ID})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -177,8 +188,14 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode tool %s: %w", key, err)
 			}
 			sol.Tools = append(sol.Tools, t)
+		case contract.ArtifactSkill:
+			var sk contract.SkillArtifact
+			if err := json.Unmarshal(entry.Value(), &sk); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode skill %s: %w", key, err)
+			}
+			sol.Skills = append(sol.Skills, sk)
 		default:
-			// Skill/Dashboard/Workflow leaves resolve here when their wires land.
+			// Dashboard/Workflow leaves resolve here when their wires land.
 		}
 	}
 	return sol, nil

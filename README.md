@@ -30,7 +30,7 @@ contract" and "SDK has two halves" sections.
 
 ```
 contract/   pure wire types — no behavior, no deps beyond stdlib
-  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, Solution (assembled)
+  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, Solution (assembled)
   envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
 
@@ -129,10 +129,15 @@ go test ./...   # embedded-NATS round-trip, no external server needed
 
 ## Next wires (each lands with a consumer)
 
-1. **Integrate the real revassure_query** — fork serves its actual executor over
-   `ServeTool`; v4 grows a KV-watch consumer + a bridge translating
-   `ToolCallResult` ↔ the platform's in-process `tools.Result`. First real
-   cross-repo + v4-imports-sdk step.
+1. **Skill loop (control plane first)** — the skill leaf already round-trips
+   (`SkillArtifact`, `TestSkillWire_RoundTrip`). NEXT: v4 imports the SDK,
+   consumes assembled `Solution.Skills`, and registers them so the agent loop
+   sees them (the richer version materialises into the workspace gitstore — the
+   seed step). A skill is pure content (no data plane), so this is the clean
+   first real cross-repo integration. The **tool** execution path waits on the
+   data plane (a solution reads via quack, publishes changes over NATS) — the
+   tool *mechanism* is already proven with a stub; `revassure_query` is a data
+   tool, blocked on quack.
 2. **Bound declarative artifacts** — dashboard + workflow bindings in the
    manifest, with announce-time validation (a bad partner artifact greys out the
    solution, never panics the platform).

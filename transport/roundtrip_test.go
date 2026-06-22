@@ -171,6 +171,71 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSkillWire_RoundTrip proves the control-plane skill wire: a solution
+// announces a skill (pure markdown content, no data plane) as its own leaf, the
+// platform discovers it via the watch, and assembles the full skill body back
+// from the `<name>.skill.<id>` leaf — alongside a tool, to show the tree carries
+// mixed artifact kinds. This is the clean first real integration: a skill needs
+// no quack/store, only the LLM context it lands in.
+func TestSkillWire_RoundTrip(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	body := "# Weekly Revenue Assurance Check\n\nReconcile provisioning/billing/CRM and publish leakage findings with EUR impact."
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "revassure",
+		DisplayName: "Revenue Assurance",
+		Version:     "0.1.0",
+		Tools: []contract.ToolDescriptor{
+			{Name: "revassure_query", Description: "query the store", Parameters: map[string]any{"type": "object"}},
+		},
+		Skills: []contract.SkillArtifact{{
+			ID:           "revassure-weekly-check",
+			Name:         "Weekly Revenue Assurance Check",
+			Description:  "Reconcile the week's signals and publish leakage findings.",
+			Source:       "revassure",
+			Tags:         []string{"revassure", "report"},
+			OutputFormat: "report",
+			Body:         body,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Skills) != 1 {
+			t.Fatalf("assembled skills = %+v, want one", sol.Skills)
+		}
+		sk := sol.Skills[0]
+		if sk.ID != "revassure-weekly-check" || sk.OutputFormat != "report" {
+			t.Fatalf("skill meta wrong: %+v", sk)
+		}
+		if sk.Body != body {
+			t.Fatalf("skill body did not round-trip: got %q", sk.Body)
+		}
+		// The tree carried mixed kinds: tool + skill, two leaves, one manifest.
+		if len(sol.Tools) != 1 || len(sol.Manifest.Artifacts) != 2 {
+			t.Fatalf("expected 1 tool + 2 artifact refs, got tools=%d refs=%d", len(sol.Tools), len(sol.Manifest.Artifacts))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+}
+
 // TestKVTree_BigArtifactStaysOffManifest is the 1 MB-limit proof: a solution
 // with a large tool (a ~600 KB description, standing in for a big skill body or
 // dashboard YAML) publishes fine because the artifact is its OWN leaf — and the

@@ -18,7 +18,7 @@ type ArtifactKind string
 
 const (
 	ArtifactTool      ArtifactKind = "tool"      // ID = tool name;  leaf payload = ToolDescriptor
-	ArtifactSkill     ArtifactKind = "skill"     // ID = skill id;   leaf payload = (lands with the skill wire)
+	ArtifactSkill     ArtifactKind = "skill"     // ID = skill id;   leaf payload = SkillArtifact
 	ArtifactDashboard ArtifactKind = "dashboard" // ID = page id;    leaf payload = (lands with the dashboard wire)
 	ArtifactWorkflow  ArtifactKind = "workflow"  // ID = slug;       leaf payload = (lands with the workflow wire)
 )
@@ -71,10 +71,30 @@ type ToolDescriptor struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
+// SkillArtifact is the leaf payload for an ArtifactSkill — a reusable
+// instruction set the agent activates for a domain workflow. It is PURE
+// CONTENT: text that goes into the LLM context, with no data access — so a
+// skill needs no data plane (unlike a tool, whose execution reads a store). It
+// mirrors the in-tree skill.Skill's declarative fields plus the markdown body.
+//
+// Body is the markdown instruction set; it is bounded by the LLM context window
+// (a megabyte skill is a context-breaker, not a storage case — see
+// MaxArtifactSize), so it sits comfortably in one KV leaf.
+type SkillArtifact struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Source       string   `json:"source,omitempty"`        // the solution that ships it
+	Tags         []string `json:"tags,omitempty"`
+	OutputFormat string   `json:"output_format,omitempty"` // e.g. "report"
+	Body         string   `json:"body"`                    // the markdown instruction set
+}
+
 // Solution is the ASSEMBLED view the platform-side watcher hands to its
-// callback: the manifest plus the resolved leaf artifacts. Skills/Dashboards/
-// Workflows join Tools here as their wires land.
+// callback: the manifest plus the resolved leaf artifacts. Dashboards/Workflows
+// join Tools and Skills here as their wires land.
 type Solution struct {
 	Manifest SolutionManifest
 	Tools    []ToolDescriptor
+	Skills   []SkillArtifact
 }
