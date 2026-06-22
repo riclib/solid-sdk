@@ -27,8 +27,13 @@ helpers. Read `README.md` for the why; this is the working guide.
   artifact is its own leaf (`<name>.<kind>.<id>`). Do NOT fold skill bodies /
   dashboard YAML into the manifest — they'd blow the cap. `PublishSolution` is
   commit-last (leaves first, manifest last) and re-publishes on every change
-  (revision bump) so `*.manifest` watchers stay correct. A single artifact over
-  `MaxArtifactSize` is rejected toward the object store, not chunked into KV.
+  (revision bump) so `*.manifest` watchers stay correct. The per-leaf cap
+  (`MaxArtifactSize`) is a TRIPWIRE for a malformed artifact, not a quota: the
+  real size limit is downstream (a skill/prompt is bounded by the LLM context,
+  far under 1 MB; a dashboard is tens of KB unless someone inlines a base64
+  image; a workflow is ~100 B/step). Oversize = a broken artifact to fix, NOT a
+  blob to route to the object store — the object store is a separate future
+  *document* kind, never an escape valve for these declarative leaves.
 
 ## Versions
 

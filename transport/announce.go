@@ -18,10 +18,16 @@ import (
 
 // MaxArtifactSize is the per-leaf size guard. NATS's default max_payload is
 // 1 MB and a KV value is one stream message; we cap a leaf below that with
-// headroom for KV/stream overhead. A single artifact (one skill body, one
-// dashboard YAML) that genuinely exceeds this belongs in the NATS object store,
-// not a KV leaf — PublishSolution rejects it rather than letting the Put fail
-// opaquely at the server.
+// headroom for KV/stream overhead.
+//
+// In practice the cap is a TRIPWIRE for a malformed artifact, never a real
+// quota: a skill/prompt goes straight into an LLM context, so it is broken at a
+// few tens of KB — a megabyte skill is a context-breaker, not a storage case; a
+// dashboard is YAML+SQL (tens of KB) unless someone inlined a base64 image; a
+// workflow is ~100 B/step. So an artifact over this cap means a broken artifact
+// to fix, NOT a blob to offload. Genuine binary blobs (documents/attachments)
+// are a separate, future artifact kind over the NATS object store — not an
+// escape valve for these declarative leaves.
 const MaxArtifactSize = 900 * 1024
 
 // SolutionPublish is the input to PublishSolution — the solution's core
@@ -185,7 +191,7 @@ func putLeaf(ctx context.Context, kv jetstream.KeyValue, key string, v any) erro
 		return fmt.Errorf("marshal %s: %w", key, err)
 	}
 	if len(b) > MaxArtifactSize {
-		return fmt.Errorf("artifact %s is %d bytes, over the %d-byte KV leaf cap — use the object store for blobs this large", key, len(b), MaxArtifactSize)
+		return fmt.Errorf("artifact %s is %d bytes, over the %d-byte KV leaf cap — this is a malformed artifact to fix (a context-breaking skill/prompt, or a dashboard with an inlined blob), not a storage problem; genuine binary blobs belong in a separate document artifact over the object store", key, len(b), MaxArtifactSize)
 	}
 	if _, err := kv.Put(ctx, key, b); err != nil {
 		return fmt.Errorf("put %s: %w", key, err)

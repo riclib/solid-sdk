@@ -219,9 +219,11 @@ func TestKVTree_BigArtifactStaysOffManifest(t *testing.T) {
 	}
 }
 
-// TestPublish_RejectsOversizeLeaf proves a single artifact that genuinely
-// exceeds the KV leaf cap is rejected up front with a clear message (pointing at
-// the object store), not left to fail opaquely at the server.
+// TestPublish_RejectsOversizeLeaf proves a single artifact over the KV leaf cap
+// is rejected up front with a clear, honest message — the cap is a tripwire for
+// a malformed artifact (a context-breaking skill/prompt, an inlined-blob
+// dashboard), not a quota to route around — rather than failing opaquely at the
+// server.
 func TestPublish_RejectsOversizeLeaf(t *testing.T) {
 	nc := startEmbeddedNATS(t)
 	js, err := jetstream.New(nc)
@@ -244,8 +246,8 @@ func TestPublish_RejectsOversizeLeaf(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected oversize leaf to be rejected, got nil")
 	}
-	if !strings.Contains(err.Error(), "object store") {
-		t.Fatalf("error should point at the object-store escape, got: %v", err)
+	if !strings.Contains(err.Error(), "malformed artifact") {
+		t.Fatalf("error should frame oversize as a malformed artifact to fix, got: %v", err)
 	}
 }
 

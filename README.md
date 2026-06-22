@@ -59,9 +59,23 @@ and assembles the solution. Two rules keep it consistent: **commit-last**
 (`PublishSolution` writes leaves first, manifest last — so a watcher that sees
 the manifest finds every leaf present) and **every change re-publishes** (the
 manifest revision bumps on any edit, so a content-only leaf change is still
-observed). A per-leaf size guard (`MaxArtifactSize`, ~900 KB) rejects a single
-artifact too big for KV up front, pointing at the NATS object store for genuine
-blobs. No single value is ever the whole solution.
+observed). No single value is ever the whole solution.
+
+**The per-leaf cap is a tripwire, not a quota.** The real size governor sits
+*downstream* of the wire and is far below 1 MB for every kind:
+
+| Kind | Real limit | Natural size |
+|---|---|---|
+| skill / prompt | the LLM context window | tens of KB (a 1 MB skill is a context-breaker — broken, not big) |
+| dashboard | sane authoring | tens of KB YAML+SQL, unless someone inlines a base64 image |
+| workflow | — | ~100 B per step |
+| tool | the LLM tool schema | a few KB |
+
+So `MaxArtifactSize` (~900 KB) exists to catch a *malformed* artifact early
+(a context-breaking body, an inlined-blob dashboard) — `PublishSolution` rejects
+it as something to fix, not to offload. Genuine binary blobs (documents /
+attachments) are a separate, future artifact kind over the NATS object store,
+never an escape valve for these declarative leaves.
 
 ## The two halves of the eventual SDK (and why only one is here)
 
