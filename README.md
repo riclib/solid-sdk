@@ -30,16 +30,38 @@ contract" and "SDK has two halves" sections.
 
 ```
 contract/   pure wire types — no behavior, no deps beyond stdlib
-  manifest.go   SolutionManifest, ToolDescriptor   (capability announcement)
+  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, Solution (assembled)
   envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
-  subjects.go   bucket name + subject helpers   (subject shape = the authz boundary)
+  subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
 
 transport/  thin nats.go helpers over the contract types
-  announce.go   EnsureSolutionsBucket, AnnounceSolution, WatchSolutions   (KV)
+  announce.go   EnsureSolutionsBucket, PublishSolution, WatchSolutions   (KV tree)
   serve.go      ServeTool   (partner side: request-reply responder)
   call.go       CallTool    (platform side: request-reply caller)
-  roundtrip_test.go   embedded-NATS proof of the full revassure_query wire
+  roundtrip_test.go   embedded-NATS proof: full wire + KV-tree size guards
 ```
+
+## Announce is a KV TREE, not one blob (the 1 MB rule)
+
+NATS's default `max_payload` is 1 MB and a KV value is one stream message, so a
+single-blob manifest carrying skill bodies + dashboard YAML would risk going
+oversize. Instead a solution publishes a **tree**:
+
+```
+<name>.manifest              small: core meta + version + revision + artifact index
+<name>.tool.<toolName>       one ToolDescriptor per leaf
+<name>.skill.<skillID>       one skill per leaf       (lands with the skill wire)
+<name>.dashboard.<pageID>    one dashboard per leaf   (lands with the dashboard wire)
+```
+
+The platform watches `*.manifest`; on a change it reads the referenced leaves
+and assembles the solution. Two rules keep it consistent: **commit-last**
+(`PublishSolution` writes leaves first, manifest last — so a watcher that sees
+the manifest finds every leaf present) and **every change re-publishes** (the
+manifest revision bumps on any edit, so a content-only leaf change is still
+observed). A per-leaf size guard (`MaxArtifactSize`, ~900 KB) rejects a single
+artifact too big for KV up front, pointing at the NATS object store for genuine
+blobs. No single value is ever the whole solution.
 
 ## The two halves of the eventual SDK (and why only one is here)
 
@@ -73,14 +95,17 @@ Per the partner-model doc, the SDK splits along opposite economics:
 ```go
 // partner (solution) side
 kv, _ := transport.EnsureSolutionsBucket(ctx, js)
-_ = transport.AnnounceSolution(ctx, kv, contract.SolutionManifest{Name: "revassure", ...})
+_ = transport.PublishSolution(ctx, kv, transport.SolutionPublish{   // leaves + manifest, commit-last
+    Name:  "revassure",
+    Tools: []contract.ToolDescriptor{{Name: "revassure_query", /* ... */}},
+})
 sub, _ := transport.ServeTool(nc, "revassure", "revassure_query",
     func(ctx context.Context, id contract.ScopedIdentity, args json.RawMessage) contract.ToolCallResult {
         // enforce id gates, run the query, return Output + AccessCounts
     })
 
 // platform side
-_ = transport.WatchSolutions(ctx, kv, onPut, onDelete)        // wire announced solutions live
+_ = transport.WatchSolutions(ctx, kv, onPut, onDelete)        // onPut gets the ASSEMBLED contract.Solution
 res, err := transport.CallTool(ctx, nc, "revassure", "revassure_query", req)  // route an agent tool call
 ```
 

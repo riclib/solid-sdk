@@ -2,12 +2,31 @@ package contract
 
 import "fmt"
 
-// SolutionsBucket is the JetStream KV bucket partner solutions announce their
-// manifest into. The platform watches it to wire solutions live.
+// SolutionsBucket is the JetStream KV bucket partner solutions announce into.
+// Keys form a per-solution tree (see ManifestKey / ArtifactKey).
 const SolutionsBucket = "solutions"
 
-// SolutionKey is the KV key a solution's manifest lands at — its bare name.
-func SolutionKey(solution string) string { return solution }
+// ManifestKey is the KV key a solution's manifest (the index + core metadata)
+// lands at: `<name>.manifest`.
+func ManifestKey(solution string) string {
+	return fmt.Sprintf("%s.manifest", solution)
+}
+
+// ArtifactKey is the KV key one artifact leaf lands at: `<name>.<kind>.<id>`.
+func ArtifactKey(solution string, kind ArtifactKind, id string) string {
+	return fmt.Sprintf("%s.%s.%s", solution, kind, id)
+}
+
+// ManifestWatchFilter is the KV key filter the platform watches to observe
+// every solution's manifest (and only manifests, not leaf churn): `*.manifest`.
+func ManifestWatchFilter() string { return "*.manifest" }
+
+// SolutionSubtree is the KV key filter covering one solution's whole tree
+// (manifest + all leaves): `<name>.>`. Used for purge/inspection, not the
+// assembly watch.
+func SolutionSubtree(solution string) string {
+	return fmt.Sprintf("%s.>", solution)
+}
 
 // ToolSubject is the NATS request-reply subject a solution serves a tool on.
 //

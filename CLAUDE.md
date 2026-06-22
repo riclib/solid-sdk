@@ -22,6 +22,13 @@ helpers. Read `README.md` for the why; this is the working guide.
 - **Never expose a primitive that escapes scoping.** No raw `*sql.DB`, no file
   paths, no unscoped connections — only the scoped envelope + typed
   request/result. The DPO promise lives in this rule.
+- **Announce is a KV TREE, never one blob.** NATS payload cap is 1 MB and a KV
+  value is one message. The manifest is a small index (`<name>.manifest`); every
+  artifact is its own leaf (`<name>.<kind>.<id>`). Do NOT fold skill bodies /
+  dashboard YAML into the manifest — they'd blow the cap. `PublishSolution` is
+  commit-last (leaves first, manifest last) and re-publishes on every change
+  (revision bump) so `*.manifest` watchers stay correct. A single artifact over
+  `MaxArtifactSize` is rejected toward the object store, not chunked into KV.
 
 ## Versions
 

@@ -3,6 +3,7 @@ package transport_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,16 +60,17 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// --- partner (fork) side: announce the manifest + serve the tool ---
+	// --- partner (fork) side: publish the solution tree + serve the tool ---
 	kv, err := transport.EnsureSolutionsBucket(ctx, js)
 	if err != nil {
 		t.Fatalf("ensure bucket: %v", err)
 	}
 
-	manifest := contract.SolutionManifest{
+	publish := transport.SolutionPublish{
 		Name:        "revassure",
 		DisplayName: "Revenue Assurance",
 		Description: "Telco B2C revenue assurance.",
+		Version:     "0.1.0",
 		Tools: []contract.ToolDescriptor{{
 			Name:        "revassure_query",
 			Description: "Query the LMT revenue-assurance store using DuckDB SQL.",
@@ -80,10 +82,9 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 				"required": []string{"sql"},
 			},
 		}},
-		Version: "0.1.0",
 	}
-	if err := transport.AnnounceSolution(ctx, kv, manifest); err != nil {
-		t.Fatalf("announce: %v", err)
+	if err := transport.PublishSolution(ctx, kv, publish); err != nil {
+		t.Fatalf("publish: %v", err)
 	}
 
 	var gotIdentity contract.ScopedIdentity
@@ -111,21 +112,28 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 	}
 	defer sub.Unsubscribe() //nolint:errcheck
 
-	// --- platform side: discover the solution via the KV watch ---
-	seen := make(chan contract.SolutionManifest, 1)
+	// --- platform side: discover + assemble the solution via the KV watch ---
+	seen := make(chan contract.Solution, 1)
 	if err := transport.WatchSolutions(ctx, kv,
-		func(m contract.SolutionManifest) { seen <- m },
+		func(sol contract.Solution) { seen <- sol },
 		nil,
 	); err != nil {
 		t.Fatalf("watch: %v", err)
 	}
 	select {
-	case m := <-seen:
-		if m.Name != "revassure" {
-			t.Fatalf("announced solution name = %q, want revassure", m.Name)
+	case sol := <-seen:
+		if sol.Manifest.Name != "revassure" {
+			t.Fatalf("announced solution name = %q, want revassure", sol.Manifest.Name)
 		}
-		if len(m.Tools) != 1 || m.Tools[0].Name != "revassure_query" {
-			t.Fatalf("announced tools = %+v, want [revassure_query]", m.Tools)
+		if sol.Manifest.Revision == 0 {
+			t.Fatal("assembled manifest has revision 0, want >=1")
+		}
+		// The tool leaf was resolved from its own KV key, not the manifest blob.
+		if len(sol.Tools) != 1 || sol.Tools[0].Name != "revassure_query" {
+			t.Fatalf("assembled tools = %+v, want [revassure_query]", sol.Tools)
+		}
+		if len(sol.Manifest.Artifacts) != 1 || sol.Manifest.Artifacts[0].Kind != contract.ArtifactTool {
+			t.Fatalf("manifest index = %+v, want one tool ref", sol.Manifest.Artifacts)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not observe announced solution within 3s")
@@ -160,6 +168,84 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 	// The scoped-identity envelope crossed the wire intact.
 	if gotIdentity.Workspace != "lmt" || gotIdentity.Role != "admin" || !gotIdentity.Interactive {
 		t.Fatalf("handler saw identity %+v, want workspace=lmt role=admin interactive=true", gotIdentity)
+	}
+}
+
+// TestKVTree_BigArtifactStaysOffManifest is the 1 MB-limit proof: a solution
+// with a large tool (a ~600 KB description, standing in for a big skill body or
+// dashboard YAML) publishes fine because the artifact is its OWN leaf — and the
+// manifest key stays tiny (core meta + a one-entry index), nowhere near the
+// 1 MB payload cap. A single-blob manifest carrying the same payload would be
+// over half the budget with one artifact.
+func TestKVTree_BigArtifactStaysOffManifest(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	big := strings.Repeat("x", 600*1024)
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name: "revassure",
+		Tools: []contract.ToolDescriptor{
+			{Name: "revassure_query", Description: big, Parameters: map[string]any{"type": "object"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("publish big artifact: %v", err)
+	}
+
+	// The manifest leaf is tiny — it holds only the index, not the body.
+	mEntry, err := kv.Get(ctx, contract.ManifestKey("revassure"))
+	if err != nil {
+		t.Fatalf("get manifest: %v", err)
+	}
+	if len(mEntry.Value()) > 4*1024 {
+		t.Fatalf("manifest is %d bytes — the big body leaked into it", len(mEntry.Value()))
+	}
+
+	// The body lives in its own leaf.
+	tEntry, err := kv.Get(ctx, contract.ArtifactKey("revassure", contract.ArtifactTool, "revassure_query"))
+	if err != nil {
+		t.Fatalf("get tool leaf: %v", err)
+	}
+	if len(tEntry.Value()) < 600*1024 {
+		t.Fatalf("tool leaf is %d bytes, expected the full body", len(tEntry.Value()))
+	}
+}
+
+// TestPublish_RejectsOversizeLeaf proves a single artifact that genuinely
+// exceeds the KV leaf cap is rejected up front with a clear message (pointing at
+// the object store), not left to fail opaquely at the server.
+func TestPublish_RejectsOversizeLeaf(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	oversize := strings.Repeat("y", transport.MaxArtifactSize+1)
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name: "revassure",
+		Tools: []contract.ToolDescriptor{
+			{Name: "revassure_query", Description: oversize, Parameters: map[string]any{"type": "object"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected oversize leaf to be rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "object store") {
+		t.Fatalf("error should point at the object-store escape, got: %v", err)
 	}
 }
 

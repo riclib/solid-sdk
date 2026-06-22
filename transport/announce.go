@@ -1,5 +1,5 @@
 // Package transport carries the thin NATS/JetStream helpers over the contract
-// wire types: the capability announcement (KV) and tool serving/calling
+// wire types: the capability announcement (KV tree) and tool serving/calling
 // (request-reply). It takes the standard nats.go handles (*nats.Conn,
 // jetstream.JetStream/KeyValue) so it composes with whatever the platform
 // already runs — the SDK adds no connection lifecycle of its own.
@@ -9,11 +9,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/riclib/solid-sdk/contract"
 )
+
+// MaxArtifactSize is the per-leaf size guard. NATS's default max_payload is
+// 1 MB and a KV value is one stream message; we cap a leaf below that with
+// headroom for KV/stream overhead. A single artifact (one skill body, one
+// dashboard YAML) that genuinely exceeds this belongs in the NATS object store,
+// not a KV leaf — PublishSolution rejects it rather than letting the Put fail
+// opaquely at the server.
+const MaxArtifactSize = 900 * 1024
+
+// SolutionPublish is the input to PublishSolution — the solution's core
+// metadata plus its artifact leaves. PublishSolution writes each artifact as
+// its own KV leaf and the manifest (index) last, so the announce never folds
+// big bodies into one oversize descriptor. Skills/Dashboards/Workflows join
+// Tools here as their wires land.
+type SolutionPublish struct {
+	Name         string
+	DisplayName  string
+	Description  string
+	Icon         string
+	SystemPrompt string
+	Version      string
+
+	Tools []contract.ToolDescriptor
+}
 
 // EnsureSolutionsBucket creates-or-gets the solutions announce bucket. Mirrors
 // v4's createOrGetKVBucket pattern (FileStorage, get-then-create). Idempotent.
@@ -23,7 +48,7 @@ func EnsureSolutionsBucket(ctx context.Context, js jetstream.JetStream) (jetstre
 	}
 	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:      contract.SolutionsBucket,
-		Description: "Partner solution manifests (capability announcement)",
+		Description: "Partner solution manifests + artifact leaves (capability announcement)",
 		Storage:     jetstream.FileStorage,
 	})
 	if err != nil {
@@ -32,34 +57,67 @@ func EnsureSolutionsBucket(ctx context.Context, js jetstream.JetStream) (jetstre
 	return kv, nil
 }
 
-// AnnounceSolution publishes a solution's manifest into the announce bucket.
-// Re-announcing the same name is an update — the platform's watcher re-wires.
-// (A heartbeat/TTL liveness story sits on top of this later; for now a Put is a
-// durable announce.)
-func AnnounceSolution(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionManifest) error {
-	if m.Name == "" {
-		return fmt.Errorf("announce: manifest has no name")
+// PublishSolution announces a solution as a KV tree: it writes every artifact
+// leaf first, then the manifest (the commit point) last with a bumped revision.
+// Commit-last guarantees a watcher that reacts to the manifest finds every
+// referenced leaf already present. Re-publishing is the only update path — any
+// change (even a content edit to one leaf) re-runs this, bumping the revision
+// so `*.manifest` watchers observe it.
+//
+// Leaves removed since the last publish are purged best-effort so a watcher
+// never resolves a stale leaf the new manifest no longer references.
+func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPublish) error {
+	if p.Name == "" {
+		return fmt.Errorf("publish: solution has no name")
 	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("announce %q: marshal: %w", m.Name, err)
+
+	// Build the index + write leaves (commit-last: leaves before manifest).
+	var index []contract.ArtifactRef
+	for _, t := range p.Tools {
+		if t.Name == "" {
+			return fmt.Errorf("publish %q: tool with empty name", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactTool, t.Name)
+		if err := putLeaf(ctx, kv, key, t); err != nil {
+			return fmt.Errorf("publish %q: tool %q: %w", p.Name, t.Name, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactTool, ID: t.Name})
 	}
-	if _, err := kv.Put(ctx, contract.SolutionKey(m.Name), b); err != nil {
-		return fmt.Errorf("announce %q: %w", m.Name, err)
+
+	// Purge leaves the previous publish had that this one drops.
+	if err := purgeStaleLeaves(ctx, kv, p.Name, index); err != nil {
+		return fmt.Errorf("publish %q: purge stale leaves: %w", p.Name, err)
+	}
+
+	// Commit: rewrite the manifest last, with a bumped revision.
+	manifest := contract.SolutionManifest{
+		Name:         p.Name,
+		DisplayName:  p.DisplayName,
+		Description:  p.Description,
+		Icon:         p.Icon,
+		SystemPrompt: p.SystemPrompt,
+		Version:      p.Version,
+		Revision:     nextRevision(ctx, kv, p.Name),
+		Artifacts:    index,
+	}
+	if err := putLeaf(ctx, kv, contract.ManifestKey(p.Name), manifest); err != nil {
+		return fmt.Errorf("publish %q: manifest: %w", p.Name, err)
 	}
 	return nil
 }
 
-// WatchSolutions invokes onPut for every current and future manifest in the
-// bucket, and onDelete (if non-nil) when a solution's entry is removed (the
-// grey-out signal). It returns once the initial replay has been delivered; the
-// watch then continues in a goroutine until ctx is cancelled.
+// WatchSolutions invokes onPut with the ASSEMBLED solution (manifest + resolved
+// leaves) for every current and future solution, and onDelete (if non-nil) when
+// a solution's manifest is removed (the grey-out signal). It watches only
+// `*.manifest`, so leaf churn alone is invisible — by design, since every
+// publish rewrites the manifest. Returns once the initial replay is delivered;
+// the watch continues in a goroutine until ctx is cancelled.
 //
-// The platform side calls this to wire announced solutions live. A bad manifest
-// (unmarshal failure) is skipped, not fatal — announce-time validation is the
-// platform's job before it acts on a manifest, never a watcher panic.
-func WatchSolutions(ctx context.Context, kv jetstream.KeyValue, onPut func(contract.SolutionManifest), onDelete func(name string)) error {
-	w, err := kv.WatchAll(ctx)
+// A manifest whose leaves fail to resolve (a buggy/racing publisher) is skipped,
+// not fatal — announce-time validation is the platform's job before it acts,
+// never a watcher panic.
+func WatchSolutions(ctx context.Context, kv jetstream.KeyValue, onPut func(contract.Solution), onDelete func(name string)) error {
+	w, err := kv.Watch(ctx, contract.ManifestWatchFilter())
 	if err != nil {
 		return fmt.Errorf("watch solutions: %w", err)
 	}
@@ -79,16 +137,103 @@ func WatchSolutions(ctx context.Context, kv jetstream.KeyValue, onPut func(contr
 					if err := json.Unmarshal(e.Value(), &m); err != nil {
 						continue
 					}
+					sol, err := assemble(ctx, kv, m)
+					if err != nil {
+						continue // unresolved leaf — skip, wait for next publish
+					}
 					if onPut != nil {
-						onPut(m)
+						onPut(sol)
 					}
 				case jetstream.KeyValueDelete, jetstream.KeyValuePurge:
 					if onDelete != nil {
-						onDelete(e.Key())
+						onDelete(solutionFromManifestKey(e.Key()))
 					}
 				}
 			}
 		}
 	}()
 	return nil
+}
+
+// assemble resolves a manifest's leaf refs into a full Solution.
+func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionManifest) (contract.Solution, error) {
+	sol := contract.Solution{Manifest: m}
+	for _, ref := range m.Artifacts {
+		key := contract.ArtifactKey(m.Name, ref.Kind, ref.ID)
+		entry, err := kv.Get(ctx, key)
+		if err != nil {
+			return contract.Solution{}, fmt.Errorf("resolve %s: %w", key, err)
+		}
+		switch ref.Kind {
+		case contract.ArtifactTool:
+			var t contract.ToolDescriptor
+			if err := json.Unmarshal(entry.Value(), &t); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode tool %s: %w", key, err)
+			}
+			sol.Tools = append(sol.Tools, t)
+		default:
+			// Skill/Dashboard/Workflow leaves resolve here when their wires land.
+		}
+	}
+	return sol, nil
+}
+
+// putLeaf marshals v and Puts it at key, enforcing the per-leaf size guard.
+func putLeaf(ctx context.Context, kv jetstream.KeyValue, key string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", key, err)
+	}
+	if len(b) > MaxArtifactSize {
+		return fmt.Errorf("artifact %s is %d bytes, over the %d-byte KV leaf cap — use the object store for blobs this large", key, len(b), MaxArtifactSize)
+	}
+	if _, err := kv.Put(ctx, key, b); err != nil {
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	return nil
+}
+
+// nextRevision reads the current manifest revision and returns +1 (1 if absent).
+func nextRevision(ctx context.Context, kv jetstream.KeyValue, solution string) uint64 {
+	entry, err := kv.Get(ctx, contract.ManifestKey(solution))
+	if err != nil {
+		return 1
+	}
+	var m contract.SolutionManifest
+	if err := json.Unmarshal(entry.Value(), &m); err != nil {
+		return 1
+	}
+	return m.Revision + 1
+}
+
+// purgeStaleLeaves deletes leaf keys present in the bucket for this solution but
+// absent from the new index (artifacts dropped since the last publish).
+func purgeStaleLeaves(ctx context.Context, kv jetstream.KeyValue, solution string, keep []contract.ArtifactRef) error {
+	keys, err := kv.ListKeys(ctx)
+	if err != nil {
+		return err
+	}
+	defer keys.Stop()
+	wanted := make(map[string]struct{}, len(keep))
+	for _, ref := range keep {
+		wanted[contract.ArtifactKey(solution, ref.Kind, ref.ID)] = struct{}{}
+	}
+	prefix := solution + "."
+	for key := range keys.Keys() {
+		if !strings.HasPrefix(key, prefix) || key == contract.ManifestKey(solution) {
+			continue // not ours, or the manifest itself (rewritten, not purged)
+		}
+		if _, ok := wanted[key]; ok {
+			continue
+		}
+		if err := kv.Purge(ctx, key); err != nil {
+			return fmt.Errorf("purge %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// solutionFromManifestKey extracts `<name>` from `<name>.manifest`.
+func solutionFromManifestKey(key string) string {
+	return strings.TrimSuffix(key, ".manifest")
 }
