@@ -1,0 +1,6 @@
+# Build artifacts
+/dist/
+*.test
+
+# OS / editor
+.DS_Store
