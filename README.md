@@ -67,7 +67,7 @@ observed). No single value is ever the whole solution.
 | Kind | Real limit | Natural size |
 |---|---|---|
 | skill / prompt | the LLM context window | tens of KB (a 1 MB skill is a context-breaker — broken, not big) |
-| dashboard | sane authoring | tens of KB YAML+SQL (no inline images — when image support lands it's by object-store reference, never base64-in-the-doc à la Grafana) |
+| dashboard | declarative surface | tens of KB YAML+SQL. No raw-HTML passthrough (that's the real footgun — raw HTML is how base64 data-URIs / XSS / arbitrary embeds ride in, as Grafana's HTML panel lets you do). Images, when supported, come by object-store reference — the sanctioned path precisely because there's no HTML hatch to inline them through. |
 | workflow | — | ~100 B per step |
 | tool | the LLM tool schema | a few KB |
 
