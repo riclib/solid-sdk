@@ -33,8 +33,7 @@ const MaxArtifactSize = 900 * 1024
 // SolutionPublish is the input to PublishSolution — the solution's core
 // metadata plus its artifact leaves. PublishSolution writes each artifact as
 // its own KV leaf and the manifest (index) last, so the announce never folds
-// big bodies into one oversize descriptor. Skills/Dashboards/Workflows join
-// Tools here as their wires land.
+// big bodies into one oversize descriptor.
 type SolutionPublish struct {
 	Name         string
 	DisplayName  string
@@ -43,8 +42,11 @@ type SolutionPublish struct {
 	SystemPrompt string
 	Version      string
 
-	Tools  []contract.ToolDescriptor
-	Skills []contract.SkillArtifact
+	Tools      []contract.ToolDescriptor
+	Skills     []contract.SkillArtifact
+	Prompts    []contract.PromptArtifact
+	Workflows  []contract.WorkflowArtifact
+	Dashboards []contract.DashboardArtifact
 }
 
 // EnsureSolutionsBucket creates-or-gets the solutions announce bucket. Mirrors
@@ -99,6 +101,36 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 			return fmt.Errorf("publish %q: skill %q: %w", p.Name, sk.ID, err)
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactSkill, ID: sk.ID})
+	}
+	for _, pr := range p.Prompts {
+		if pr.ID == "" {
+			return fmt.Errorf("publish %q: prompt with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactPrompt, pr.ID)
+		if err := putLeaf(ctx, kv, key, pr); err != nil {
+			return fmt.Errorf("publish %q: prompt %q: %w", p.Name, pr.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactPrompt, ID: pr.ID})
+	}
+	for _, wf := range p.Workflows {
+		if wf.ID == "" {
+			return fmt.Errorf("publish %q: workflow with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactWorkflow, wf.ID)
+		if err := putLeaf(ctx, kv, key, wf); err != nil {
+			return fmt.Errorf("publish %q: workflow %q: %w", p.Name, wf.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactWorkflow, ID: wf.ID})
+	}
+	for _, db := range p.Dashboards {
+		if db.ID == "" {
+			return fmt.Errorf("publish %q: dashboard with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactDashboard, db.ID)
+		if err := putLeaf(ctx, kv, key, db); err != nil {
+			return fmt.Errorf("publish %q: dashboard %q: %w", p.Name, db.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactDashboard, ID: db.ID})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -194,8 +226,26 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode skill %s: %w", key, err)
 			}
 			sol.Skills = append(sol.Skills, sk)
+		case contract.ArtifactPrompt:
+			var pr contract.PromptArtifact
+			if err := json.Unmarshal(entry.Value(), &pr); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode prompt %s: %w", key, err)
+			}
+			sol.Prompts = append(sol.Prompts, pr)
+		case contract.ArtifactWorkflow:
+			var wf contract.WorkflowArtifact
+			if err := json.Unmarshal(entry.Value(), &wf); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode workflow %s: %w", key, err)
+			}
+			sol.Workflows = append(sol.Workflows, wf)
+		case contract.ArtifactDashboard:
+			var db contract.DashboardArtifact
+			if err := json.Unmarshal(entry.Value(), &db); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode dashboard %s: %w", key, err)
+			}
+			sol.Dashboards = append(sol.Dashboards, db)
 		default:
-			// Dashboard/Workflow leaves resolve here when their wires land.
+			// Unknown future leaf kinds resolve here when their wires land.
 		}
 	}
 	return sol, nil

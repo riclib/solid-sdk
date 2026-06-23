@@ -236,6 +236,81 @@ func TestSkillWire_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestDeclarativeArtifacts_RoundTrip proves the three control-plane declarative
+// wires (prompt, workflow, dashboard) announce as their own leaves and assemble
+// back with their Body intact — alongside a skill, to show the tree carries all
+// the control-plane kinds together. Each is pure content (no data plane), so
+// like the skill wire they need no quack/store, only the LLM context / renderer
+// they land in.
+func TestDeclarativeArtifacts_RoundTrip(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	promptBody := "You are a revenue-assurance analyst. Reconcile provisioning, billing and CRM."
+	workflowBody := "steps:\n  - reconcile\n  - publish_findings\n"
+	dashboardBody := "title: Weekly Leakage\npanels:\n  - kind: table\n    sql: SELECT * FROM report_weekly\n"
+
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "revassure",
+		DisplayName: "Revenue Assurance",
+		Version:     "0.1.0",
+		Skills: []contract.SkillArtifact{{
+			ID: "revassure-weekly-check", Name: "Weekly Check",
+			Description: "Reconcile the week's signals.", Source: "revassure",
+			Body: "# Weekly check",
+		}},
+		Prompts: []contract.PromptArtifact{{
+			ID: "revassure-analyst", Name: "RA Analyst Prompt",
+			Description: "Analyst system prompt.", Source: "revassure",
+			Tags: []string{"revassure"}, Body: promptBody,
+		}},
+		Workflows: []contract.WorkflowArtifact{{
+			ID: "revassure-weekly-flow", Name: "Weekly Flow",
+			Description: "Weekly reconciliation workflow.", Source: "revassure",
+			Tags: []string{"revassure"}, Body: workflowBody,
+		}},
+		Dashboards: []contract.DashboardArtifact{{
+			ID: "revassure-leakage", Name: "Leakage Dashboard",
+			Description: "Weekly leakage view.", Source: "revassure",
+			Tags: []string{"revassure"}, Body: dashboardBody,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Prompts) != 1 || sol.Prompts[0].ID != "revassure-analyst" || sol.Prompts[0].Body != promptBody {
+			t.Fatalf("prompt did not round-trip: %+v", sol.Prompts)
+		}
+		if len(sol.Workflows) != 1 || sol.Workflows[0].ID != "revassure-weekly-flow" || sol.Workflows[0].Body != workflowBody {
+			t.Fatalf("workflow did not round-trip: %+v", sol.Workflows)
+		}
+		if len(sol.Dashboards) != 1 || sol.Dashboards[0].ID != "revassure-leakage" || sol.Dashboards[0].Body != dashboardBody {
+			t.Fatalf("dashboard did not round-trip: %+v", sol.Dashboards)
+		}
+		// One skill + one each of the three new kinds = four leaves, one manifest.
+		if len(sol.Skills) != 1 || len(sol.Manifest.Artifacts) != 4 {
+			t.Fatalf("expected 1 skill + 4 artifact refs, got skills=%d refs=%d", len(sol.Skills), len(sol.Manifest.Artifacts))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+}
+
 // TestKVTree_BigArtifactStaysOffManifest is the 1 MB-limit proof: a solution
 // with a large tool (a ~600 KB description, standing in for a big skill body or
 // dashboard YAML) publishes fine because the artifact is its OWN leaf — and the

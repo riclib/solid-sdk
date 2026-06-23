@@ -19,8 +19,9 @@ type ArtifactKind string
 const (
 	ArtifactTool      ArtifactKind = "tool"      // ID = tool name;  leaf payload = ToolDescriptor
 	ArtifactSkill     ArtifactKind = "skill"     // ID = skill id;   leaf payload = SkillArtifact
-	ArtifactDashboard ArtifactKind = "dashboard" // ID = page id;    leaf payload = (lands with the dashboard wire)
-	ArtifactWorkflow  ArtifactKind = "workflow"  // ID = slug;       leaf payload = (lands with the workflow wire)
+	ArtifactPrompt    ArtifactKind = "prompt"    // ID = prompt id;  leaf payload = PromptArtifact
+	ArtifactWorkflow  ArtifactKind = "workflow"  // ID = slug;       leaf payload = WorkflowArtifact
+	ArtifactDashboard ArtifactKind = "dashboard" // ID = page id;    leaf payload = DashboardArtifact
 )
 
 // ArtifactRef is one entry in the manifest's index — kind + id is the leaf
@@ -90,11 +91,63 @@ type SkillArtifact struct {
 	Body         string   `json:"body"`                    // the markdown instruction set
 }
 
+// PromptArtifact is the leaf payload for an ArtifactPrompt — a reusable prompt
+// the solution ships into the agent. Like a skill it is PURE CONTROL-PLANE
+// CONTENT: text that goes into the LLM context, with no data access — so it
+// needs no data plane.
+//
+// Body is the prompt text/markdown; it is bounded by the LLM context window (a
+// megabyte prompt is a context-breaker, not a storage case — see
+// MaxArtifactSize), so it sits comfortably in one KV leaf.
+type PromptArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the prompt text/markdown
+}
+
+// WorkflowArtifact is the leaf payload for an ArtifactWorkflow — an adaptive
+// workflow definition the solution ships. Like a skill it is PURE CONTROL-PLANE
+// CONTENT: a declarative definition the platform parses and runs, with no data
+// access of its own.
+//
+// Body is the workflow definition YAML (the v4 side parses it); a workflow is
+// ~100 B per step, so it sits comfortably under MaxArtifactSize in one KV leaf.
+type WorkflowArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the workflow definition YAML
+}
+
+// DashboardArtifact is the leaf payload for an ArtifactDashboard — a dashboard
+// page the solution ships. Like a skill it is PURE CONTROL-PLANE CONTENT: a
+// declarative surface the platform renders, with no data access of its own (its
+// panels query through scoped tools, never an ambient store).
+//
+// Body is the dashboard DSL YAML (the v4 side parses it); a dashboard is tens
+// of KB of YAML+SQL — no raw-HTML/base64 passthrough — so it sits comfortably
+// under MaxArtifactSize in one KV leaf.
+type DashboardArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the dashboard DSL YAML
+}
+
 // Solution is the ASSEMBLED view the platform-side watcher hands to its
-// callback: the manifest plus the resolved leaf artifacts. Dashboards/Workflows
-// join Tools and Skills here as their wires land.
+// callback: the manifest plus the resolved leaf artifacts.
 type Solution struct {
-	Manifest SolutionManifest
-	Tools    []ToolDescriptor
-	Skills   []SkillArtifact
+	Manifest   SolutionManifest
+	Tools      []ToolDescriptor
+	Skills     []SkillArtifact
+	Prompts    []PromptArtifact
+	Workflows  []WorkflowArtifact
+	Dashboards []DashboardArtifact
 }

@@ -30,7 +30,7 @@ contract" and "SDK has two halves" sections.
 
 ```
 contract/   pure wire types — no behavior, no deps beyond stdlib
-  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, Solution (assembled)
+  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, PromptArtifact, WorkflowArtifact, DashboardArtifact, Solution (assembled)
   envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
 
@@ -50,8 +50,10 @@ oversize. Instead a solution publishes a **tree**:
 ```
 <name>.manifest              small: core meta + version + revision + artifact index
 <name>.tool.<toolName>       one ToolDescriptor per leaf
-<name>.skill.<skillID>       one skill per leaf       (lands with the skill wire)
-<name>.dashboard.<pageID>    one dashboard per leaf   (lands with the dashboard wire)
+<name>.skill.<skillID>       one skill per leaf
+<name>.prompt.<promptID>     one prompt per leaf
+<name>.workflow.<slug>       one workflow per leaf    (Body = workflow definition YAML)
+<name>.dashboard.<pageID>    one dashboard per leaf   (Body = dashboard DSL YAML)
 ```
 
 The platform watches `*.manifest`; on a change it reads the referenced leaves
@@ -138,9 +140,13 @@ go test ./...   # embedded-NATS round-trip, no external server needed
    data plane (a solution reads via quack, publishes changes over NATS) — the
    tool *mechanism* is already proven with a stub; `revassure_query` is a data
    tool, blocked on quack.
-2. **Bound declarative artifacts** — dashboard + workflow bindings in the
-   manifest, with announce-time validation (a bad partner artifact greys out the
-   solution, never panics the platform).
+2. **Declarative artifact leaves** — the prompt, workflow and dashboard leaves
+   now round-trip (`PromptArtifact` / `WorkflowArtifact` / `DashboardArtifact`,
+   `TestDeclarativeArtifacts_RoundTrip`): each is pure control-plane content
+   (`Body` carries the prompt text / workflow definition YAML / dashboard DSL
+   YAML), assembled back onto `Solution.Prompts/Workflows/Dashboards`. NEXT:
+   a v4 consumer parses each Body with announce-time validation (a bad partner
+   artifact greys out the solution, never panics the platform).
 3. **The answer/notary spine** — committed answer → JetStream (durable,
    sequenced), the seam Bulletproof's hash-chain reads from.
 4. **Bundled-infra extraction** — move v4's dashboard-DSL / markdown / charts /
