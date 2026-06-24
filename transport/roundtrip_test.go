@@ -321,6 +321,71 @@ func TestDeclarativeArtifacts_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestDataArtifacts_RoundTrip proves the two data-shaped declarative wires
+// (catalog, projection) announce as their own leaves and assemble back with
+// their Body intact — alongside a skill, to show the tree carries them with the
+// other control-plane kinds. Each Body is opaque YAML (a catalog schema / a
+// DuckDB transform) the v4 side parses; the SDK only round-trips the bytes.
+func TestDataArtifacts_RoundTrip(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	catalogBody := "catalog: leakage_findings\ndialect: duckdb\ngrounding: |\n  One row per reconciliation finding.\nlabels:\n  severity: status\n"
+	projectionBody := "target_catalog: leakage_findings\nsource: raw_signals\nlabels:\n  severity: status\nsql: SELECT * FROM raw_signals WHERE mismatch\n"
+
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "revassure",
+		DisplayName: "Revenue Assurance",
+		Version:     "0.1.0",
+		Skills: []contract.SkillArtifact{{
+			ID: "revassure-weekly-check", Name: "Weekly Check",
+			Description: "Reconcile the week's signals.", Source: "revassure",
+			Body: "# Weekly check",
+		}},
+		Catalogs: []contract.CatalogArtifact{{
+			ID: "revassure-leakage-catalog", Name: "Leakage Findings Catalog",
+			Description: "Schema for reconciliation findings.", Source: "revassure",
+			Tags: []string{"revassure"}, Body: catalogBody,
+		}},
+		Projections: []contract.ProjectionArtifact{{
+			ID: "revassure-leakage-projection", Name: "Leakage Projection",
+			Description: "Transform raw signals into findings.", Source: "revassure",
+			Tags: []string{"revassure"}, Body: projectionBody,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Catalogs) != 1 || sol.Catalogs[0].ID != "revassure-leakage-catalog" || sol.Catalogs[0].Body != catalogBody {
+			t.Fatalf("catalog did not round-trip: %+v", sol.Catalogs)
+		}
+		if len(sol.Projections) != 1 || sol.Projections[0].ID != "revassure-leakage-projection" || sol.Projections[0].Body != projectionBody {
+			t.Fatalf("projection did not round-trip: %+v", sol.Projections)
+		}
+		// One skill + one catalog + one projection = three leaves, one manifest.
+		if len(sol.Skills) != 1 || len(sol.Manifest.Artifacts) != 3 {
+			t.Fatalf("expected 1 skill + 3 artifact refs, got skills=%d refs=%d", len(sol.Skills), len(sol.Manifest.Artifacts))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+}
+
 // TestKVTree_BigArtifactStaysOffManifest is the 1 MB-limit proof: a solution
 // with a large tool (a ~600 KB description, standing in for a big skill body or
 // dashboard YAML) publishes fine because the artifact is its OWN leaf — and the

@@ -17,11 +17,13 @@ package contract
 type ArtifactKind string
 
 const (
-	ArtifactTool      ArtifactKind = "tool"      // ID = tool name;  leaf payload = ToolDescriptor
-	ArtifactSkill     ArtifactKind = "skill"     // ID = skill id;   leaf payload = SkillArtifact
-	ArtifactPrompt    ArtifactKind = "prompt"    // ID = prompt id;  leaf payload = PromptArtifact
-	ArtifactWorkflow  ArtifactKind = "workflow"  // ID = slug;       leaf payload = WorkflowArtifact
-	ArtifactDashboard ArtifactKind = "dashboard" // ID = page id;    leaf payload = DashboardArtifact
+	ArtifactTool       ArtifactKind = "tool"       // ID = tool name;  leaf payload = ToolDescriptor
+	ArtifactSkill      ArtifactKind = "skill"      // ID = skill id;   leaf payload = SkillArtifact
+	ArtifactPrompt     ArtifactKind = "prompt"     // ID = prompt id;  leaf payload = PromptArtifact
+	ArtifactWorkflow   ArtifactKind = "workflow"   // ID = slug;       leaf payload = WorkflowArtifact
+	ArtifactDashboard  ArtifactKind = "dashboard"  // ID = page id;    leaf payload = DashboardArtifact
+	ArtifactCatalog    ArtifactKind = "catalog"    // ID = catalog id; leaf payload = CatalogArtifact
+	ArtifactProjection ArtifactKind = "projection" // ID = projection id; leaf payload = ProjectionArtifact
 )
 
 // ArtifactRef is one entry in the manifest's index — kind + id is the leaf
@@ -171,13 +173,50 @@ type DashboardArtifact struct {
 	Body        string   `json:"body"` // the dashboard DSL YAML
 }
 
+// CatalogArtifact is the leaf payload for an ArtifactCatalog — a catalog schema
+// the solution ships. Like a skill it is PURE CONTROL-PLANE CONTENT: a
+// declarative schema the platform parses, with no data access of its own (it
+// describes a catalog; the rows live in the data plane, loaded separately).
+//
+// Body is the catalog schema YAML (the v4 side parses it): the catalogdb schema
+// + dialect + grounding + label column roles. It is short structured text —
+// well under MaxArtifactSize — so it sits comfortably in one KV leaf.
+type CatalogArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the catalog schema YAML
+}
+
+// ProjectionArtifact is the leaf payload for an ArtifactProjection — a DuckDB
+// transform the solution ships. Like a skill it is PURE CONTROL-PLANE CONTENT: a
+// declarative definition the platform parses and runs, with no data access of
+// its own.
+//
+// Body is a small YAML describing the transform ({target_catalog, source,
+// labels, sql}); the v4 side parses it. It is a handful of fields plus one SQL
+// statement — well under MaxArtifactSize — so it sits comfortably in one KV
+// leaf.
+type ProjectionArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the projection YAML: {target_catalog, source, labels, sql}
+}
+
 // Solution is the ASSEMBLED view the platform-side watcher hands to its
 // callback: the manifest plus the resolved leaf artifacts.
 type Solution struct {
-	Manifest   SolutionManifest
-	Tools      []ToolDescriptor
-	Skills     []SkillArtifact
-	Prompts    []PromptArtifact
-	Workflows  []WorkflowArtifact
-	Dashboards []DashboardArtifact
+	Manifest    SolutionManifest
+	Tools       []ToolDescriptor
+	Skills      []SkillArtifact
+	Prompts     []PromptArtifact
+	Workflows   []WorkflowArtifact
+	Dashboards  []DashboardArtifact
+	Catalogs    []CatalogArtifact
+	Projections []ProjectionArtifact
 }

@@ -42,11 +42,13 @@ type SolutionPublish struct {
 	SystemPrompt string
 	Version      string
 
-	Tools      []contract.ToolDescriptor
-	Skills     []contract.SkillArtifact
-	Prompts    []contract.PromptArtifact
-	Workflows  []contract.WorkflowArtifact
-	Dashboards []contract.DashboardArtifact
+	Tools       []contract.ToolDescriptor
+	Skills      []contract.SkillArtifact
+	Prompts     []contract.PromptArtifact
+	Workflows   []contract.WorkflowArtifact
+	Dashboards  []contract.DashboardArtifact
+	Catalogs    []contract.CatalogArtifact
+	Projections []contract.ProjectionArtifact
 
 	// Partner is the optional commercial identity of the organization shipping
 	// the solution — copied verbatim into the announced manifest's Partner
@@ -137,6 +139,26 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 			return fmt.Errorf("publish %q: dashboard %q: %w", p.Name, db.ID, err)
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactDashboard, ID: db.ID})
+	}
+	for _, cat := range p.Catalogs {
+		if cat.ID == "" {
+			return fmt.Errorf("publish %q: catalog with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactCatalog, cat.ID)
+		if err := putLeaf(ctx, kv, key, cat); err != nil {
+			return fmt.Errorf("publish %q: catalog %q: %w", p.Name, cat.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactCatalog, ID: cat.ID})
+	}
+	for _, pj := range p.Projections {
+		if pj.ID == "" {
+			return fmt.Errorf("publish %q: projection with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactProjection, pj.ID)
+		if err := putLeaf(ctx, kv, key, pj); err != nil {
+			return fmt.Errorf("publish %q: projection %q: %w", p.Name, pj.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactProjection, ID: pj.ID})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -251,6 +273,18 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode dashboard %s: %w", key, err)
 			}
 			sol.Dashboards = append(sol.Dashboards, db)
+		case contract.ArtifactCatalog:
+			var cat contract.CatalogArtifact
+			if err := json.Unmarshal(entry.Value(), &cat); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode catalog %s: %w", key, err)
+			}
+			sol.Catalogs = append(sol.Catalogs, cat)
+		case contract.ArtifactProjection:
+			var pj contract.ProjectionArtifact
+			if err := json.Unmarshal(entry.Value(), &pj); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode projection %s: %w", key, err)
+			}
+			sol.Projections = append(sol.Projections, pj)
 		default:
 			// Unknown future leaf kinds resolve here when their wires land.
 		}
