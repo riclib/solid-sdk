@@ -24,6 +24,7 @@ const (
 	ArtifactDashboard  ArtifactKind = "dashboard"  // ID = page id;    leaf payload = DashboardArtifact
 	ArtifactCatalog    ArtifactKind = "catalog"    // ID = catalog id; leaf payload = CatalogArtifact
 	ArtifactProjection ArtifactKind = "projection" // ID = projection id; leaf payload = ProjectionArtifact
+	ArtifactRunnable   ArtifactKind = "runnable"   // ID = runnable type; leaf payload = RunnableDescriptor
 )
 
 // ArtifactRef is one entry in the manifest's index — kind + id is the leaf
@@ -219,4 +220,8 @@ type Solution struct {
 	Dashboards  []DashboardArtifact
 	Catalogs    []CatalogArtifact
 	Projections []ProjectionArtifact
+	// Runnables are the announced long-running runnables (the durable-work peer
+	// of Tools). The platform registers a remote-proxy jobs.Runnable per entry
+	// and triggers it over the JetStream work-queue (transport.RunRunnable).
+	Runnables []RunnableDescriptor
 }

@@ -49,6 +49,7 @@ type SolutionPublish struct {
 	Dashboards  []contract.DashboardArtifact
 	Catalogs    []contract.CatalogArtifact
 	Projections []contract.ProjectionArtifact
+	Runnables   []contract.RunnableDescriptor
 
 	// Partner is the optional commercial identity of the organization shipping
 	// the solution — copied verbatim into the announced manifest's Partner
@@ -159,6 +160,16 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 			return fmt.Errorf("publish %q: projection %q: %w", p.Name, pj.ID, err)
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactProjection, ID: pj.ID})
+	}
+	for _, rn := range p.Runnables {
+		if rn.Type == "" {
+			return fmt.Errorf("publish %q: runnable with empty type", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactRunnable, rn.Type)
+		if err := putLeaf(ctx, kv, key, rn); err != nil {
+			return fmt.Errorf("publish %q: runnable %q: %w", p.Name, rn.Type, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactRunnable, ID: rn.Type})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -285,6 +296,12 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode projection %s: %w", key, err)
 			}
 			sol.Projections = append(sol.Projections, pj)
+		case contract.ArtifactRunnable:
+			var rn contract.RunnableDescriptor
+			if err := json.Unmarshal(entry.Value(), &rn); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode runnable %s: %w", key, err)
+			}
+			sol.Runnables = append(sol.Runnables, rn)
 		default:
 			// Unknown future leaf kinds resolve here when their wires land.
 		}
