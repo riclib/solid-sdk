@@ -35,7 +35,36 @@ helpers. Read `README.md` for the why; this is the working guide.
   blob to route to the object store — the object store is a separate future
   *document* kind, never an escape valve for these declarative leaves.
 
-## Versions
+## Logging — every solution logs via `solid-sdk/log` (S-1462)
+
+Logging is **baseline**: every solution does it, so it lives IN the core SDK
+module as a normal package (`solid-sdk/log`), NOT a separate Go module. Separate
+modules are reserved for real CGO cost (duckdb/quack/sqlite); a pure-Go slog
+wrapper + nats handler does not qualify. The pretty-printer deps
+(`dusted-go/logging`, `phsym/console-slog`) landing on the core module is fine
+and intended — and the package is CGO-free.
+
+- **Use `log.Pkg(domain, pkg) *slog.Logger`** once per package at startup and
+  store the result (`var log = sdklog.Pkg("partner", "announce")`). `New(cfg)`
+  builds the app/nats/http loggers from `Config`; `DefaultConfig()` is the
+  starting point. The platform (v4) consumes the SAME package via its
+  `infra/logging` thin delegator (type aliases + func wrappers) — identical
+  dev/prod behavior on both sides.
+- **Field-key constants are a frozen, shared vocabulary** (additive only). Use
+  them so a partner record correlates with a platform record on identical keys:
+  `FieldSolution = "solution"`, `FieldRevision = "revision"`,
+  `FieldWorkspace = "workspace"`, `FieldCorrID = "corr_id"`. The solution
+  template wires these on.
+- **NATS handler = how partner logs reach the platform.** `NewNATSHandler(nc,
+  solution, opts)` is an opt-in `slog.Handler` that publishes records to
+  `LogSubject(solution)` → `solid.log.<solution>` over a caller-provided
+  `*nats.Conn` (it never opens a connection, and is NOT constructed in an
+  `init()` — importing the package for plain `Pkg()` logging requires no live
+  NATS). **Volume guard:** a bounded async buffer (default 1024) with a single
+  background publisher that **drops on full** and counts drops (`Dropped()`),
+  so logging can neither back-pressure the app nor fire-hose NATS. The
+  solution template wires the handler on; for plain CLIs leave it off. (Wiring
+  the platform-side collector + the fork daemon is S-1463.)
 
 `nats.go` and `nats-server/v2` are pinned to match v4's go.mod (`v1.48.0` /
 `v2.12.2`). When v4 bumps them, bump here in lockstep — a skew breaks the

@@ -12,6 +12,11 @@ require (
 )
 
 require (
+	github.com/dusted-go/logging v1.3.0
+	github.com/phsym/console-slog v0.3.1
+)
+
+require (
 	github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op // indirect
 	github.com/google/go-tpm v0.9.6 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
