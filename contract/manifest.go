@@ -60,6 +60,36 @@ type SolutionManifest struct {
 	// Artifacts is the index of leaf keys this solution publishes. The platform
 	// reads `<name>.<kind>.<id>` for each.
 	Artifacts []ArtifactRef `json:"artifacts"`
+
+	// Partner is the optional commercial identity of the organization that
+	// ships this solution — the metadata the platform renders in the operator
+	// "Partner" panel (name, website, support contacts, address, a one-line
+	// about, and a reference to a logo asset). It rides in the small manifest
+	// index, NOT a leaf: every field is short text (the logo is a REFERENCE,
+	// not the bytes — the image itself lives in the NATS object store, fetched
+	// via LogoRef). All fields are optional; an empty Partner renders nothing.
+	// Additive + backward-compatible (a manifest without it round-trips fine).
+	Partner Partner `json:"partner,omitempty"`
+}
+
+// Partner is the optional commercial identity of the organization shipping a
+// solution. It is pure declarative metadata the platform renders — short text
+// fields plus LogoRef, an object-store KEY (not bytes; see transport.AssetKey /
+// transport.GetAsset) so the manifest stays a small index. Every field is
+// optional/omitempty; the platform shows the panel only when at least one is
+// set.
+type Partner struct {
+	Name         string `json:"name,omitempty"`          // "CUBE Systems SIA"
+	URL          string `json:"url,omitempty"`           // "https://www.cubesystems.lv/"
+	SupportEmail string `json:"support_email,omitempty"` // "info@cubesystems.lv"
+	SupportPhone string `json:"support_phone,omitempty"` // "+371 2618 1526"
+	Address      string `json:"address,omitempty"`       // postal address
+	About        string `json:"about,omitempty"`         // one-line tagline
+	// LogoRef is the object-store key of the partner logo image (see
+	// transport.AssetKey, e.g. "<solution>/partner-logo"). The platform reads
+	// the bytes + content-type via transport.GetAsset and serves them for an
+	// <img>. Empty = no logo.
+	LogoRef string `json:"logo_ref,omitempty"`
 }
 
 // ToolDescriptor is the leaf payload for an ArtifactTool — the LLM-facing

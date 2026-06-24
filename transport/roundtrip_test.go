@@ -71,6 +71,11 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 		DisplayName: "Revenue Assurance",
 		Description: "Telco B2C revenue assurance.",
 		Version:     "0.1.0",
+		Partner: contract.Partner{
+			Name:    "CUBE Systems SIA",
+			URL:     "https://www.cubesystems.lv/",
+			LogoRef: transport.AssetKey("revassure", "partner-logo"),
+		},
 		Tools: []contract.ToolDescriptor{{
 			Name:        "revassure_query",
 			Description: "Query the LMT revenue-assurance store using DuckDB SQL.",
@@ -134,6 +139,11 @@ func TestRevAssureQueryRoundTrip(t *testing.T) {
 		}
 		if len(sol.Manifest.Artifacts) != 1 || sol.Manifest.Artifacts[0].Kind != contract.ArtifactTool {
 			t.Fatalf("manifest index = %+v, want one tool ref", sol.Manifest.Artifacts)
+		}
+		// The Partner block rode in the manifest index (not a leaf).
+		if sol.Manifest.Partner.Name != "CUBE Systems SIA" ||
+			sol.Manifest.Partner.LogoRef != transport.AssetKey("revassure", "partner-logo") {
+			t.Fatalf("partner did not round-trip: %+v", sol.Manifest.Partner)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not observe announced solution within 3s")

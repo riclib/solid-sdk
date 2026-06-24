@@ -47,6 +47,12 @@ type SolutionPublish struct {
 	Prompts    []contract.PromptArtifact
 	Workflows  []contract.WorkflowArtifact
 	Dashboards []contract.DashboardArtifact
+
+	// Partner is the optional commercial identity of the organization shipping
+	// the solution — copied verbatim into the announced manifest's Partner
+	// block. Empty = no partner panel. The logo bytes are published separately
+	// to the object store (see PutAsset); Partner.LogoRef carries only the key.
+	Partner contract.Partner
 }
 
 // EnsureSolutionsBucket creates-or-gets the solutions announce bucket. Mirrors
@@ -148,6 +154,7 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 		Version:      p.Version,
 		Revision:     nextRevision(ctx, kv, p.Name),
 		Artifacts:    index,
+		Partner:      p.Partner,
 	}
 	if err := putLeaf(ctx, kv, contract.ManifestKey(p.Name), manifest); err != nil {
 		return fmt.Errorf("publish %q: manifest: %w", p.Name, err)
