@@ -2,9 +2,10 @@ package log
 
 // Shared structured-log field keys. Both the platform (v4) and partner
 // solutions attach these via slog attrs so every record correlates on identical
-// keys — a log shipped over NATS from a partner lines up with a platform record
-// without a per-side rename. These are the convention the solution template
-// wires on; treat them as a frozen vocabulary (additive only).
+// keys — a partner record lines up with a platform record without a per-side
+// rename, whether read from local sinks or ingested centrally (Loki etc.).
+// These are the convention the solution template wires on; treat them as a
+// frozen vocabulary (additive only).
 const (
 	// FieldSolution names the solution emitting the record (e.g. "revassure").
 	FieldSolution = "solution"
