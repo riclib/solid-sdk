@@ -25,6 +25,7 @@ const (
 	ArtifactCatalog    ArtifactKind = "catalog"    // ID = catalog id; leaf payload = CatalogArtifact
 	ArtifactProjection ArtifactKind = "projection" // ID = projection id; leaf payload = ProjectionArtifact
 	ArtifactRunnable   ArtifactKind = "runnable"   // ID = runnable type; leaf payload = RunnableDescriptor
+	ArtifactJob        ArtifactKind = "job"        // ID = job id; leaf payload = JobArtifact
 )
 
 // ArtifactRef is one entry in the manifest's index — kind + id is the leaf
@@ -209,6 +210,24 @@ type ProjectionArtifact struct {
 	Body        string   `json:"body"` // the projection YAML: {target_catalog, source, labels, sql}
 }
 
+// JobArtifact is the leaf payload for an ArtifactJob — a job definition the
+// solution ships. Like a projection it is PURE CONTROL-PLANE CONTENT: a
+// declarative definition the platform parses and DEPLOYS DISABLED (an operator
+// then runs/schedules it), with no data access of its own.
+//
+// Body is the job-definition YAML (a jobs.JobConfig the v4 side parses): name,
+// description, and the pipeline steps (runnable + config_id + exit_on). It is a
+// handful of fields plus a small step list — well under MaxArtifactSize — so it
+// sits comfortably in one KV leaf.
+type JobArtifact struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source,omitempty"` // the solution that ships it
+	Tags        []string `json:"tags,omitempty"`
+	Body        string   `json:"body"` // the job-definition YAML (a jobs.JobConfig)
+}
+
 // Solution is the ASSEMBLED view the platform-side watcher hands to its
 // callback: the manifest plus the resolved leaf artifacts.
 type Solution struct {
@@ -224,4 +243,7 @@ type Solution struct {
 	// of Tools). The platform registers a remote-proxy jobs.Runnable per entry
 	// and triggers it over the JetStream work-queue (transport.RunRunnable).
 	Runnables []RunnableDescriptor
+	// Jobs are the announced job definitions. The platform deploys each DISABLED
+	// (Active=false, unscheduled); an operator then runs/schedules it.
+	Jobs []JobArtifact
 }

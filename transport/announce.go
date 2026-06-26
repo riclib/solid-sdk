@@ -50,6 +50,7 @@ type SolutionPublish struct {
 	Catalogs    []contract.CatalogArtifact
 	Projections []contract.ProjectionArtifact
 	Runnables   []contract.RunnableDescriptor
+	Jobs        []contract.JobArtifact
 
 	// Partner is the optional commercial identity of the organization shipping
 	// the solution — copied verbatim into the announced manifest's Partner
@@ -170,6 +171,16 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 			return fmt.Errorf("publish %q: runnable %q: %w", p.Name, rn.Type, err)
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactRunnable, ID: rn.Type})
+	}
+	for _, j := range p.Jobs {
+		if j.ID == "" {
+			return fmt.Errorf("publish %q: job with empty id", p.Name)
+		}
+		key := contract.ArtifactKey(p.Name, contract.ArtifactJob, j.ID)
+		if err := putLeaf(ctx, kv, key, j); err != nil {
+			return fmt.Errorf("publish %q: job %q: %w", p.Name, j.ID, err)
+		}
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactJob, ID: j.ID})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -302,6 +313,12 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode runnable %s: %w", key, err)
 			}
 			sol.Runnables = append(sol.Runnables, rn)
+		case contract.ArtifactJob:
+			var j contract.JobArtifact
+			if err := json.Unmarshal(entry.Value(), &j); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode job %s: %w", key, err)
+			}
+			sol.Jobs = append(sol.Jobs, j)
 		default:
 			// Unknown future leaf kinds resolve here when their wires land.
 		}
