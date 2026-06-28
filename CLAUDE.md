@@ -92,5 +92,5 @@ New transport helpers extend it (or add a sibling) with the same shape.
 - `~/repo/v4` (platform) — will import `contract` + `transport` to watch
   announced solutions and route tool calls. The inversion lands here first (v4
   depends on the SDK for new wire code), before any shared-infra extraction.
-- `~/repo/solid-partner` (the fork) — will import the same to announce + serve
+- `~/repo/solid-kit` (the fork) — will import the same to announce + serve
   its solutions over the bus, replacing today's in-process registration.
