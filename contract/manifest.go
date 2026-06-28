@@ -74,6 +74,17 @@ type SolutionManifest struct {
 	// via LogoRef). All fields are optional; an empty Partner renders nothing.
 	// Additive + backward-compatible (a manifest without it round-trips fine).
 	Partner Partner `json:"partner,omitempty"`
+
+	// Fires declares the workflows this solution fires over the bus (the fire
+	// wire, transport.PublishFire) — a CAPABILITY declaration, not an artifact
+	// body, so it rides in the small manifest index like Partner. At approve-time
+	// the platform grants the partner account publish on solid.fire.run.<name>.>
+	// and renders these for the operator (what inbound events the solution reacts
+	// to, which workflow each fires). Empty = the solution fires nothing. Additive
+	// + backward-compatible. The richer DECLARATIVE form — the platform owning the
+	// consumer via a seed-mapped EventTrigger artifact — is the 0.3.0 direction;
+	// this v0 flag authorizes + surfaces the imperative fire path.
+	Fires []FireDescriptor `json:"fires,omitempty"`
 }
 
 // Partner is the optional commercial identity of the organization shipping a
