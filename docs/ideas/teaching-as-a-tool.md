@@ -61,6 +61,45 @@ And a **skill** ("building-solid-solutions"): the agent-facing half — *"to add
 extend, or upgrade a solution, use the `solid-sdk` tool; don't guess conventions
 or copy a stale sibling."* One-for-one with the icon-search skill's contract.
 
+## Command surface (strawman)
+
+The fuller subcommand surface (Ricardo, 2026-06-28). It splits along the line the
+idea already draws — **deterministic, embedded, version-locked** (pure Go the
+agent *calls*, like icon-search) vs **Claude-driven** (the tool ships the logic +
+a skill; the agent executes):
+
+| Command | Kind | Notes |
+|---|---|---|
+| `solidsdk icon search` / `icon validate` | deterministic | `search` is the proven, already-shipped pattern; `validate` checks an icon name resolves before it reaches a build |
+| `solidsdk skill scaffold` / `skill validate` | deterministic | `new solution` at skill granularity + a focused `doctor` |
+| `solidsdk dashboard validate` / `workflow validate` | deterministic | the **executable form of the `docs/sdk/` contracts** — see below |
+| `solidsdk install skills` | deterministic | install/refresh the skill-pack into the repo (the `sync`/`teach` write) |
+| `solidsdk claudemd update` | deterministic | (re)write the generic convention `CLAUDE.md`s from the version-locked teaching |
+| `solidsdk migrate` | **Claude-driven** | walk the repo from its current SDK conventions to the bumped version — "fork without the fork tax", delivered by the tool, not `git merge` |
+
+Only `migrate` (and any future `explain`) needs an LLM; everything else is offline
+and deterministic. That's the icon-search contract generalized: the binary is the
+authority, the skill just says *use it, don't guess*.
+
+### `validate` is the contract, executable — the anti-rot answer
+
+The `validate` family is the **executable twin of the `docs/sdk/` contracts**
+(`dashboard-dsl.md`, `workflow-defs.md`). Those are prose, and prose rots: a
+correctness pass on both (v4 S-1524, 2026-06-28) found the dashboard doc still
+claiming "nothing implemented yet" long after the substrate shipped, a breaking
+heatmap-axes change under-documented, dead worked-example paths, and a workflow
+"goal seam" helper that never existed. A `solidsdk dashboard validate <file>` /
+`workflow validate <file>` **cannot** drift the same way — it *is* the contract.
+
+And the validators **already half-exist**: v4's `infra/dashboard/validate.go` and
+`domains/workflow/yaml.go` (`KnownFields(true)` strict decode) do this work today,
+in-tree. Lifting them into `solid-sdk` makes the check runnable by third parties
+and in CI, and reframes the open "where do the SDK docs live" question: the docs
+become the **human-readable companion** to a machine-checkable surface, and
+`claudemd update` keeps even that fresh. (This is the durable answer to the
+`docs/sdk/` completeness gap — a parent announce/manifest doc that can rot vs a
+`validate` command that can't.)
+
 ## Decisions leaning in
 1. **Home = `solid-sdk`, not `solid-kit`.** Forks depend on the SDK, not the kit;
    capability must ride the SDK bump. The kit is just the initial clone.
