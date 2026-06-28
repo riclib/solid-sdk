@@ -87,3 +87,40 @@ func RunnableResultSubject(runID string) string {
 // run (`solid.runnable.result.>`) — the subject set the durable result stream
 // binds (see transport.EnsureRunnableStream).
 func RunnableResultSubjectAll() string { return "solid.runnable.result.>" }
+
+// FireRunSubject is the JetStream work-queue subject a solution publishes a fire
+// request to: `solid.fire.run.<solution>.<workflow>`. It is the INVERSE direction
+// of RunnableRunSubject (solution→platform, not platform→solution): a solution
+// asks the platform to run one of its workflows in a workspace. Durable +
+// at-least-once — a fire waits in the queue if the platform is momentarily down
+// and survives a restart. Like the tool + runnable subjects, the shape IS the
+// authz boundary: a partner account is granted FireRunSubjectPrefix.
+func FireRunSubject(solution, workflow string) string {
+	return fmt.Sprintf("solid.fire.run.%s.%s", solution, workflow)
+}
+
+// FireRunSubjectPrefix is the wildcard covering all of a solution's fire requests
+// (`solid.fire.run.<solution>.>`) — the publish permission a partner account is
+// granted to fire any of its announced workflows.
+func FireRunSubjectPrefix(solution string) string {
+	return fmt.Sprintf("solid.fire.run.%s.>", solution)
+}
+
+// FireRunSubjectAll is the work-queue stream's capture filter across every
+// solution (`solid.fire.run.>`) — the subject set the platform's SINGLE fire
+// consumer binds (see transport.EnsureFireStreams / ServeFires). Unlike the
+// runnable wire (one consumer per solution), the platform drains every solution's
+// fires through one consumer.
+func FireRunSubjectAll() string { return "solid.fire.run.>" }
+
+// FireResultSubject is the JetStream per-fire subject the terminal FireResult is
+// published to: `solid.fire.result.<runkey>`. Durable (keyed by RunKey) so the
+// disposition can be read after the fact — there is no live reply subject across
+// the durable queue.
+func FireResultSubject(runKey string) string {
+	return fmt.Sprintf("solid.fire.result.%s", runKey)
+}
+
+// FireResultSubjectAll is the result stream's capture filter across every fire
+// (`solid.fire.result.>`) — the subject set the durable result stream binds.
+func FireResultSubjectAll() string { return "solid.fire.result.>" }
