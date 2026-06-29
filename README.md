@@ -89,6 +89,13 @@ work. A boxes-and-arrows tool can't reach outside its own canvas. A Solid soluti
 can do anything Go can — and *still* gets every platform service above
 (compliance, data, admin, access, cost) for free underneath it.
 
+**And you only write the part that's yours.** Need data out of SAP, Oracle Apps, or
+any system without an off-the-shelf connector? You write the **integration bit** —
+the piece specific to your system — and a high-performance Go loader is built around
+it *with* Claude. Solid supplies everything else a production loader needs:
+scheduling, incremental keep (only the new data, deduped), logging, and load
+management. You own the slice that's unique to you; the platform is the rest.
+
 Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
 
 ## The mental model: you teach, you don't wire
