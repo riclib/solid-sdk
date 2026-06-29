@@ -54,6 +54,22 @@ Point it at a source (a blob store, a database, a file drop); it samples and lea
 the shape; it keeps the data current incrementally as new data arrives. Your
 solution supplies the *decoder* — what the events mean — never a data engine.
 
+## The mental model: you teach, you don't wire
+
+Two load-bearing ideas:
+
+- **The skill is the product.** A skill is a markdown document — your expert's
+  playbook: what to look at, how to judge it, what counts as a finding, how to
+  write it up. You're not programming a workflow engine; you're onboarding an
+  analyst who is tireless, consistent, and fully auditable.
+- **You bring your data; Solid keeps it.** You decode your domain once; the
+  platform handles landing it, keeping it fresh, and scoping it. The agent only
+  ever sees what the asking user is allowed to see.
+
+That's why a *business* team — not only a dev team — can build solutions: the hard,
+valuable part is the methodology and the data meaning, written in language your
+best people already speak.
+
 ## What you get for free
 
 Building on Solid means the hard platform concerns are already handled — your team
@@ -94,11 +110,10 @@ language and its entire ecosystem: custom integrations, your own algorithms, a
 bespoke connector, even **a standalone public web app with its own interface and
 its own AI** that feeds your solution.
 
-That is not hypothetical. One of our service-desk solutions ships exactly that — a
-**public self-service portal** a customer chats with (its own web front end, its
-own model) that hands the conversation to the solution over the bus; the solution
-then correlates the report against history and raises a finding for an agent to
-work. A boxes-and-arrows tool can't reach outside its own canvas. A Solid solution
+One of our service-desk solutions does exactly that: a **public self-service
+portal** a customer chats with — its own web front end, its own model — that hands
+the conversation to the solution over the bus; the solution then correlates the
+report against history and raises a finding for an agent to work. A boxes-and-arrows tool can't reach outside its own canvas. A Solid solution
 can do anything Go can — and *still* gets every platform service above
 (compliance, data, admin, access, cost) for free underneath it.
 
@@ -118,22 +133,6 @@ PowerDesigner install and no export files. **About four hours, end to end.** The
 long tail of *"but our data lives in X"* stops being a blocker.
 
 Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
-
-## The mental model: you teach, you don't wire
-
-Two load-bearing ideas:
-
-- **The skill is the product.** A skill is a markdown document — your expert's
-  playbook: what to look at, how to judge it, what counts as a finding, how to
-  write it up. You're not programming a workflow engine; you're onboarding an
-  analyst who is tireless, consistent, and fully auditable.
-- **You bring your data; Solid keeps it.** You decode your domain once; the
-  platform handles landing it, keeping it fresh, and scoping it. The agent only
-  ever sees what the asking user is allowed to see.
-
-That's why a *business* team — not only a dev team — can build solutions: the hard,
-valuable part is the methodology and the data meaning, written in language your
-best people already speak.
 
 ## solid-sdk + solid-kit
 
