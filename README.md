@@ -100,10 +100,10 @@ you; the platform is the rest.
 
 For a state institution in Portugal, that's how we built a loader that
 reverse-engineered an entire SAP PowerDesigner data model — tables, columns,
-datatypes, foreign keys — straight out of its raw repository database of ~16 million
-objects, in pure Go, with no PowerDesigner install and no export files. **About four
-hours, end to end.** The long tail of *"but our data lives in X"* stops being a
-blocker.
+datatypes, foreign keys — straight out of its raw repository database (over **60
+million rows** in the relationship graph alone), in pure Go, with no PowerDesigner
+install and no export files. **About four hours, end to end.** The long tail of
+*"but our data lives in X"* stops being a blocker.
 
 Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
 
