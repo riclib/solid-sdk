@@ -90,12 +90,20 @@ work. A boxes-and-arrows tool can't reach outside its own canvas. A Solid soluti
 can do anything Go can — and *still* gets every platform service above
 (compliance, data, admin, access, cost) for free underneath it.
 
-**And you only write the part that's yours.** Need data out of SAP, Oracle Apps, or
-any system without an off-the-shelf connector? You write the **integration bit** —
-the piece specific to your system — and a high-performance Go loader is built around
-it *with* Claude. Solid supplies everything else a production loader needs:
-scheduling, incremental keep (only the new data, deduped), logging, and load
-management. You own the slice that's unique to you; the platform is the rest.
+**And Claude writes the part that's yours — with you.** Need data out of SAP,
+Oracle Apps, or any system without an off-the-shelf connector? Claude writes the
+**integration bit** with you — the piece specific to your system — leveraging Go's
+vast ecosystem, and a high-performance loader takes shape around it. Solid supplies
+everything else a production loader needs: scheduling, incremental keep (new data
+only, deduped), logging, and load management. You bring the slice that's unique to
+you; the platform is the rest.
+
+For a state institution in Portugal, that's how we built a loader that
+reverse-engineered an entire SAP PowerDesigner data model — tables, columns,
+datatypes, foreign keys — straight out of its raw repository database of ~16 million
+objects, in pure Go, with no PowerDesigner install and no export files. **About four
+hours, end to end.** The long tail of *"but our data lives in X"* stops being a
+blocker.
 
 Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
 
