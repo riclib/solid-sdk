@@ -72,6 +72,25 @@ spends its time on the domain, not the plumbing:
   your team owns, builds with Claude, and tests like software — while every
   platform service above comes for free underneath it.
 
+## No ceiling: the Go escape
+
+Declarative artifacts — skills, dashboards, data models — carry most of a solution.
+When you need more, there is no wall, because a solution is a **real Go program**,
+not configuration fed to an interpreter. Drop to code and you have the whole
+language and its entire ecosystem: custom integrations, your own algorithms, a
+bespoke connector, even **a standalone public web app with its own interface and
+its own AI** that feeds your solution.
+
+That is not hypothetical. One of our service-desk solutions ships exactly that — a
+**public self-service portal** a customer chats with (its own web front end, its
+own model) that hands the conversation to the solution over the bus; the solution
+then correlates the report against history and raises a finding for an agent to
+work. A boxes-and-arrows tool can't reach outside its own canvas. A Solid solution
+can do anything Go can — and *still* gets every platform service above
+(compliance, data, admin, access, cost) for free underneath it.
+
+Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
+
 ## The mental model: you teach, you don't wire
 
 Two load-bearing ideas:
