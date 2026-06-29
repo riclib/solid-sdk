@@ -152,6 +152,23 @@ solidsdk validate                   # lint the whole solution against the platfo
 solidsdk migrate                    # upgrade to a new Solid version — Claude applies the changes
 ```
 
+## Solutions compose
+
+What your team deploys on Solid isn't a solution in isolation — it's a
+**workspace**, and a workspace can draw on **many solutions at once**. Because
+every solution runs on the same governed fabric and answers to the same agent —
+one that only ever sees what the asking user is allowed to see — they combine
+instead of colliding.
+
+So Churn Watch, Sales Integrity, and the Service Desk aren't three installs a
+department juggles; they're capabilities one analyst can reason across in a
+single investigation. The value isn't additive, it's **combinatorial**: each
+solution you add is worth more because of the ones already there. Apps from
+different vendors stay silos forever — solutions on Solid get more useful
+together. That's the platform answer to *"why build all of these in one place"*:
+you're not buying N tools, you're growing a system whose parts multiply each
+other, in your environment.
+
 ## How a solution ships and runs
 
 A finished solution **announces itself** to the platform: it appears in the admin
