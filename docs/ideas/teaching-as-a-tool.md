@@ -61,6 +61,15 @@ And a **skill** ("building-solid-solutions"): the agent-facing half — *"to add
 extend, or upgrade a solution, use the `solid-sdk` tool; don't guess conventions
 or copy a stale sibling."* One-for-one with the icon-search skill's contract.
 
+### Distribution: the skill IS the install (Ricardo, 2026-06-29)
+The skill **packages the CLI binary** and ships via the **Claude Desktop plugin
+marketplace**. A builder installs "Solid" from the marketplace and is immediately
+going — no separate CLI install, no PATH, no clone-first dance. Onboarding
+collapses to: *install the skill → "start a new solution" → scaffold → build*.
+This is the zero-setup front door the [builder README](../../README.md) opens
+with, and it makes the marketplace the distribution channel for the on-ramp (the
+runtime stays the licensed artifact — see [distribution-and-licensing](./distribution-and-licensing.md)).
+
 ## Command surface (strawman)
 
 The fuller subcommand surface (Ricardo, 2026-06-28). It splits along the line the

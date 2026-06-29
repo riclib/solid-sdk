@@ -11,11 +11,12 @@ wire protocol live in [`ARCHITECTURE.md`](./ARCHITECTURE.md).)
 
 ## A day building a solution
 
-1. **Scaffold.** `solidsdk new solution churn-watch` — you get a complete,
-   runnable solution repo (a solid-kit project), ready to open.
-2. **Open it in Claude.** Open the repo in Claude Desktop, code mode. Your
-   co-builder now has the project, its conventions, and the SDK's own guidance in
-   front of it.
+1. **Install the Solid skill.** In Claude Desktop, install **Solid** from the
+   plugin marketplace. It carries the `solidsdk` toolkit and the build-a-solution
+   know-how — nothing else to set up.
+2. **Ask Claude to scaffold.** *"Start a new solution called churn-watch."* You get
+   a complete, runnable solution repo (a solid-kit project), open in code mode,
+   with your co-builder already fluent in its conventions.
 3. **Give it example data, and talk.** Drop in a sample export — call records,
    billing rows, tickets — and describe what you want to watch. Claude writes the
    **data loaders**, the **data model**, and the **skills** (the analyst's
@@ -122,6 +123,9 @@ best people already speak.
   ships its own conventions so Claude already knows how to extend a solution. The
   rule is *ask the tool, don't guess* — the version of the SDK your repo depends on
   is the version of the guidance you get, so it never goes stale.
+- **The Solid skill** — the toolkit packaged as a Claude Desktop skill, installed
+  from the plugin marketplace. It carries the CLI and the conventions, so a builder
+  goes from "install" to "scaffolding a solution" without setting anything up.
 
 ```bash
 solidsdk new solution churn-watch   # scaffold a solid-kit solution repo
