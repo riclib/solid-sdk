@@ -98,12 +98,12 @@ everything else a production loader needs: scheduling, incremental keep (new dat
 only, deduped), logging, and load management. You bring the slice that's unique to
 you; the platform is the rest.
 
-For a state institution in Portugal, that's how we built a loader that
-reverse-engineered an entire SAP PowerDesigner data model — tables, columns,
-datatypes, foreign keys — straight out of its raw repository database (over **60
-million rows** in the relationship graph alone), in pure Go, with no PowerDesigner
-install and no export files. **About four hours, end to end.** The long tail of
-*"but our data lives in X"* stops being a blocker.
+For a state institution in Portugal, that's how Claude understood an entire SAP
+PowerDesigner data model — tables, columns, datatypes, foreign keys — and built a
+full incremental loader for it, straight out of its raw repository database (over
+**60 million rows** in the relationship graph alone), in pure Go, with no
+PowerDesigner install and no export files. **About four hours, end to end.** The
+long tail of *"but our data lives in X"* stops being a blocker.
 
 Most days you'll never need the escape. It's the reason you'll never hit a ceiling.
 
