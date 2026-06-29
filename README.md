@@ -77,10 +77,13 @@ This is not theoretical. An internal team at a global healthcare company had bui
 an incident-annotation tool — matching new incidents to past resolutions — in Python
 and Streamlit. It worked, but their security review blocked it: gigabytes of
 dependencies, no audit trail, weak credential handling. We helped them keep the part
-that mattered — the business logic — and shed the rest onto the platform. It came
-back **~10× smaller**, in Go, with no UI to maintain and no Python dependency
-sprawl — and audit logging, credential management, and scoped access came for free.
-Leaner, faster, compliant, and running happily in production.
+that mattered — the business logic — and shed the rest onto the platform. The port
+itself was almost mundane: drop the existing app into a subfolder, ask Claude *"how
+would we re-engineer this to run smoothly and compliantly on Solid?"*, and iterate
+for about two hours. It came back **~10× smaller**, in Go, with no UI to maintain
+and no Python dependency sprawl — and audit logging, credential management, and
+scoped access came for free. Leaner, faster, compliant, and running happily in
+production.
 
 ## No ceiling: the Go escape
 
