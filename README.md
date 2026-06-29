@@ -1,153 +1,128 @@
-# solid-sdk
+# Solid SDK — build solutions on Solid
 
-The **kernel** of the Solid partner model: the wire contract a partner solution
-and the Solid platform exchange over NATS / JetStream / KV, plus thin transport
-helpers. Pure data types + nats.go glue — **zero dependency on the v4 platform.**
+> Bring your data, teach an AI analyst your domain, ship it — with Claude as your
+> co-builder. It then works your data every day, shows its reasoning, and your
+> people stay in control.
 
-Both sides depend on this module (the dependency inversion): the platform (v4)
-imports it to *watch* announced solutions and *route* tool calls; a partner
-solution imports it to *announce* its manifest and *serve* its tools.
+The Solid SDK and its companion starter, **solid-kit**, are how your team builds
+**solutions** — the vertical capabilities your analysts and engineers run on top
+of the Solid platform. This is the builder's guide. (Platform internals and the
+wire protocol live in [`ARCHITECTURE.md`](./ARCHITECTURE.md).)
 
-> **Status:** Phase 1 — the first wire. The `revassure_query` tool round-trips
-> end-to-end over loopback NATS (`transport` round-trip test). This is the
-> strangler proof: the same announce + serve + call the cross-process split will
-> use, today in one process.
+## A day building a solution
 
-## Why this exists
+1. **Scaffold.** `solidsdk new solution churn-watch` — you get a complete,
+   runnable solution repo (a solid-kit project), ready to open.
+2. **Open it in Claude.** Open the repo in Claude Desktop, code mode. Your
+   co-builder now has the project, its conventions, and the SDK's own guidance in
+   front of it.
+3. **Give it example data, and talk.** Drop in a sample export — call records,
+   billing rows, tickets — and describe what you want to watch. Claude writes the
+   **data loaders**, the **data model**, and the **skills** (the analyst's
+   methodology) with you, against your real shape.
+4. **Run it.** One command connects your solution to Solid. It's **live** — your
+   data lands, the dashboards fill, the agent can work it.
+5. **Test and iterate.** Watch the agent reason over your data in *glass*, correct
+   it, sharpen the skill, re-run — until it does the job your best analyst would.
 
-In the partner-model architecture, partner and platform talk mostly over the bus
-(NATS request-reply for tools, JetStream for the committed-answer/notary spine,
-KV for capability announcement, quack for data). When the boundary is a bus, the
-SDK is *mostly types + helpers* — which is exactly what this module is. Until the
-boundary is a bus it can't be: the in-process registration API (func pointers,
-live services) isn't a wire contract. So this repo grows **one real wire at a
-time, each with a live consumer**, never a speculative type catalog.
+No screen-by-screen app build, no integration project. A person who knows the
+domain, plus Claude, plus a sample of the data — that's the team.
 
-See `docs/ideas/solution-layer-and-partner-model.md` (v4 repo), the "solution
-contract" and "SDK has two halves" sections.
+## What you're building
 
-## Packages
+A **solution** is a domain capability. For a telecom operator:
 
-```
-contract/   pure wire types — no behavior, no deps beyond stdlib
-  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, PromptArtifact, WorkflowArtifact, DashboardArtifact, Solution (assembled)
-  envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
-  subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
+- **Sales Integrity** — catch mis-sold or mis-billed contracts across telephony, CRM, billing
+- **Service Desk** — triage tickets, investigate, draft resolutions
+- **Churn Watch** — surface at-risk accounts from usage and care signals
+- **Network Quality · Revenue Assurance · Fraud** — turn raw signals into findings someone can act on
 
-transport/  thin nats.go helpers over the contract types
-  announce.go   EnsureSolutionsBucket, PublishSolution, WatchSolutions   (KV tree)
-  serve.go      ServeTool   (partner side: request-reply responder)
-  call.go       CallTool    (platform side: request-reply caller)
-  roundtrip_test.go   embedded-NATS proof: full wire + KV-tree size guards
-```
+## What's inside a solution
 
-## Announce is a KV TREE, not one blob (the 1 MB rule)
-
-NATS's default `max_payload` is 1 MB and a KV value is one stream message, so a
-single-blob manifest carrying skill bodies + dashboard YAML would risk going
-oversize. Instead a solution publishes a **tree**:
-
-```
-<name>.manifest              small: core meta + version + revision + artifact index
-<name>.tool.<toolName>       one ToolDescriptor per leaf
-<name>.skill.<skillID>       one skill per leaf
-<name>.prompt.<promptID>     one prompt per leaf
-<name>.workflow.<slug>       one workflow per leaf    (Body = workflow definition YAML)
-<name>.dashboard.<pageID>    one dashboard per leaf   (Body = dashboard DSL YAML)
-```
-
-The platform watches `*.manifest`; on a change it reads the referenced leaves
-and assembles the solution. Two rules keep it consistent: **commit-last**
-(`PublishSolution` writes leaves first, manifest last — so a watcher that sees
-the manifest finds every leaf present) and **every change re-publishes** (the
-manifest revision bumps on any edit, so a content-only leaf change is still
-observed). No single value is ever the whole solution.
-
-**The per-leaf cap is a tripwire, not a quota.** The real size governor sits
-*downstream* of the wire and is far below 1 MB for every kind:
-
-| Kind | Real limit | Natural size |
+| Part | What it is | Who writes it |
 |---|---|---|
-| skill / prompt | the LLM context window | tens of KB (a 1 MB skill is a context-breaker — broken, not big) |
-| dashboard | declarative surface | tens of KB YAML+SQL. No raw-HTML passthrough (that's the real footgun — raw HTML is how base64 data-URIs / XSS / arbitrary embeds ride in, as Grafana's HTML panel lets you do). Images, when supported, come by object-store reference — the sanctioned path precisely because there's no HTML hatch to inline them through. |
-| workflow | — | ~100 B per step |
-| tool | the LLM tool schema | a few KB |
+| **Skills** | the methodology — how an analyst reasons, in plain markdown | your domain expert, with Claude |
+| **Data model** | the shape of your data and what each column means | inferred from your sample, with Claude |
+| **Loaders** | how raw data is read, decoded, and kept fresh | Claude, against your source |
+| **Dashboards** | what to watch — charts over your data, in YAML | declared |
+| **Workflows** | when to act — a scheduled check that runs a skill | declared |
+| **Tools / actions** | optional — let the agent *do* things, not just read | optional |
 
-So `MaxArtifactSize` (~900 KB) exists to catch a *malformed* artifact early
-(a context-breaking body, an inlined-blob dashboard) — `PublishSolution` rejects
-it as something to fix, not to offload. Genuine binary blobs (documents /
-attachments) are a separate, future artifact kind over the NATS object store,
-never an escape valve for these declarative leaves.
+Underneath, the platform does the heavy lifting — **connect → discover → keep.**
+Point it at a source (a blob store, a database, a file drop); it samples and learns
+the shape; it keeps the data current incrementally as new data arrives. Your
+solution supplies the *decoder* — what the events mean — never a data engine.
 
-## The two halves of the eventual SDK (and why only one is here)
+## What you get for free
 
-Per the partner-model doc, the SDK splits along opposite economics:
+Building on Solid means the hard platform concerns are already handled — your team
+spends its time on the domain, not the plumbing:
 
-- **Bus contract (this repo, greenfield).** New wire types + NATS/KV/quack
-  helpers. No v4 code to mirror, so it's safe to author fresh here. This is what
-  Phase 1 builds.
-- **Bundled infra (later, an *extraction*).** markdown, charts/SVG, the
-  dashboard-DSL parser+validator, quack table-shaping. These already exist in
-  v4's `infra/` and **must be the same module both sides run** (else the partner
-  validates v1 while the platform renders v2). So that half is moved *out of v4
-  into here*, not rewritten — gated on actually needing it. Not in this repo yet.
+- **EU AI Act compliant by design.** Solid logs, traces, and records every decision
+  the agent makes at the level the Act expects. It will even **draft a full
+  compliance report for your solution** and guide you in keeping it conformant as
+  it evolves — so "is our AI auditable?" is answered before the auditor asks.
+- **Credentials, monitoring, cost — built in.** Credential management, performance
+  monitoring, and cost control with per-workspace / per-solution attribution come
+  with the platform. Nothing extra to stand up.
+- **A full admin console.** Workspaces, users and access, approvals, and your
+  solution's whole lifecycle are managed in Solid's admin interface out of the box.
+- **Your solution is native code — not a DAG diagram.** No boxes-and-arrows
+  low-code canvas you outgrow in month three. It's real, version-controlled code
+  your team owns, builds with Claude, and tests like software — while every
+  platform service above comes for free underneath it.
 
-## Design invariants (already encoded)
+## The mental model: you teach, you don't wire
 
-- **Agent-as-lens on every call.** `ScopedIdentity{identity, workspace, role,
-  interactive}` rides on every `ToolCallRequest`. A solution gates against the
-  envelope, never ambient state — there is none across the bus.
-- **Subject shape is the sandbox.** `solid.tool.<solution>.<tool>`; a partner
-  account is granted `solid.tool.<solution>.>`. Addressing and authz are one.
-- **Tool failure is data; transport failure is an error.** A declined/failed
-  tool returns `ToolCallResult.Error`; only a no-responder/timeout returns a Go
-  error from `CallTool`.
-- **Request-reply is live, not durable.** Tool calls are tied to the running
-  agent loop (no JetStream on the input) — a lost turn is re-asked, never
-  replayed. (The committed *answer* → JetStream is a separate, later wire.)
+Two load-bearing ideas:
 
-## Use
+- **The skill is the product.** A skill is a markdown document — your expert's
+  playbook: what to look at, how to judge it, what counts as a finding, how to
+  write it up. You're not programming a workflow engine; you're onboarding an
+  analyst who is tireless, consistent, and fully auditable.
+- **You bring your data; Solid keeps it.** You decode your domain once; the
+  platform handles landing it, keeping it fresh, and scoping it. The agent only
+  ever sees what the asking user is allowed to see.
 
-```go
-// partner (solution) side
-kv, _ := transport.EnsureSolutionsBucket(ctx, js)
-_ = transport.PublishSolution(ctx, kv, transport.SolutionPublish{   // leaves + manifest, commit-last
-    Name:  "revassure",
-    Tools: []contract.ToolDescriptor{{Name: "revassure_query", /* ... */}},
-})
-sub, _ := transport.ServeTool(nc, "revassure", "revassure_query",
-    func(ctx context.Context, id contract.ScopedIdentity, args json.RawMessage) contract.ToolCallResult {
-        // enforce id gates, run the query, return Output + AccessCounts
-    })
+That's why a *business* team — not only a dev team — can build solutions: the hard,
+valuable part is the methodology and the data meaning, written in language your
+best people already speak.
 
-// platform side
-_ = transport.WatchSolutions(ctx, kv, onPut, onDelete)        // onPut gets the ASSEMBLED contract.Solution
-res, err := transport.CallTool(ctx, nc, "revassure", "revassure_query", req)  // route an agent tool call
-```
+## solid-sdk + solid-kit
+
+- **solid-kit** — the starter. `solidsdk new solution` scaffolds it into a
+  complete, runnable solution you fill in.
+- **solid-sdk** — the toolkit that scaffolds, validates, and upgrades it, and
+  ships its own conventions so Claude already knows how to extend a solution. The
+  rule is *ask the tool, don't guess* — the version of the SDK your repo depends on
+  is the version of the guidance you get, so it never goes stale.
 
 ```bash
-go test ./...   # embedded-NATS round-trip, no external server needed
+solidsdk new solution churn-watch   # scaffold a solid-kit solution repo
+solidsdk validate                   # lint the whole solution against the platform contract
+solidsdk migrate                    # upgrade to a new Solid version — Claude applies the changes
 ```
 
-## Next wires (each lands with a consumer)
+## How a solution ships and runs
 
-1. **Skill loop (control plane first)** — the skill leaf already round-trips
-   (`SkillArtifact`, `TestSkillWire_RoundTrip`). NEXT: v4 imports the SDK,
-   consumes assembled `Solution.Skills`, and registers them so the agent loop
-   sees them (the richer version materialises into the workspace gitstore — the
-   seed step). A skill is pure content (no data plane), so this is the clean
-   first real cross-repo integration. The **tool** execution path waits on the
-   data plane (a solution reads via quack, publishes changes over NATS) — the
-   tool *mechanism* is already proven with a stub; `revassure_query` is a data
-   tool, blocked on quack.
-2. **Declarative artifact leaves** — the prompt, workflow and dashboard leaves
-   now round-trip (`PromptArtifact` / `WorkflowArtifact` / `DashboardArtifact`,
-   `TestDeclarativeArtifacts_RoundTrip`): each is pure control-plane content
-   (`Body` carries the prompt text / workflow definition YAML / dashboard DSL
-   YAML), assembled back onto `Solution.Prompts/Workflows/Dashboards`. NEXT:
-   a v4 consumer parses each Body with announce-time validation (a bad partner
-   artifact greys out the solution, never panics the platform).
-3. **The answer/notary spine** — committed answer → JetStream (durable,
-   sequenced), the seam Bulletproof's hash-chain reads from.
-4. **Bundled-infra extraction** — move v4's dashboard-DSL / markdown / charts /
-   quack-shaping here as shared packages (the second half).
+A finished solution **announces itself** to the platform: it appears in the admin
+console, an operator reviews and approves it, and it goes live. Nothing a solution
+ships reaches a user until an operator says yes.
+
+A solution runs **only on a licensed Solid platform.** Build it for your own teams
+(internal use) or, as a partner, package it for your customers — the runtime is
+Solid either way, and the access model is the same: the agent is a lens on the
+user, never above them.
+
+## Versions & support
+
+- The SDK is versioned; once you've built against it, upgrades are **additive**,
+  and `solidsdk migrate` carries your solution forward when the platform moves.
+- The contracts your solution declares against (data model, dashboards, workflows)
+  ship as both human docs and machine-readable schemas the toolkit validates.
+
+---
+
+*Building the platform itself, or integrating at the wire level? See
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) for the announce protocol, the contract
+types, and the transport layer.*
