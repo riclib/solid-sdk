@@ -164,6 +164,16 @@ A solution runs **only on a licensed Solid platform.** Build it for your own tea
 Solid either way, and the access model is the same: the agent is a lens on the
 user, never above them.
 
+## Your builds shape the roadmap
+
+This is how we build the platform's roadmap: from what builders actually had to
+build, and the feedback you send back. When a solution needs something the platform
+doesn't have yet, that need is what prioritizes the next capability — and when it
+lands, a skill migrates your solution onto it, so what you built bespoke becomes
+something you get for free. It's how the data catalog gained its *business-name*
+field, and how incremental data loading is becoming a platform feature — both driven
+by real engagements.
+
 ## Versions & support
 
 - The SDK is versioned; once you've built against it, upgrades are **additive**,
