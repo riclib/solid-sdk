@@ -73,6 +73,15 @@ spends its time on the domain, not the plumbing:
   your team owns, builds with Claude, and tests like software — while every
   platform service above comes for free underneath it.
 
+This is not theoretical. An internal team at a global healthcare company had built
+an incident-annotation tool — matching new incidents to past resolutions — in Python
+and Streamlit. It worked, but their security review blocked it: gigabytes of
+dependencies, no audit trail, weak credential handling. We helped them keep the part
+that mattered — the business logic — and shed the rest onto the platform. It came
+back **~10× smaller**, in Go, with no UI to maintain and no Python dependency
+sprawl — and audit logging, credential management, and scoped access came for free.
+Leaner, faster, compliant, and running happily in production.
+
 ## No ceiling: the Go escape
 
 Declarative artifacts — skills, dashboards, data models — carry most of a solution.
