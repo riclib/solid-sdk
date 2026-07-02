@@ -126,6 +126,11 @@ type ToolDescriptor struct {
 // Body is the markdown instruction set; it is bounded by the LLM context window
 // (a megabyte skill is a context-breaker, not a storage case — see
 // MaxArtifactSize), so it sits comfortably in one KV leaf.
+//
+// Queries, Active and Parameters are the v0.4.0 additions (S-1587; design:
+// v4 repo docs/design/skill-named-queries.md). All three are additive —
+// omitempty, absent = prior behavior — so a v0.3.0 producer's announce still
+// parses unchanged.
 type SkillArtifact struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
@@ -134,6 +139,91 @@ type SkillArtifact struct {
 	Tags         []string `json:"tags,omitempty"`
 	OutputFormat string   `json:"output_format,omitempty"` // e.g. "report"
 	Body         string   `json:"body"`                    // the markdown instruction set
+
+	// Queries are the skill's named queries (design doc §2.1): fixed SQL the
+	// harness runs once at skill activation, against the workspace data
+	// session, with results injected into the skill's context block. Empty =
+	// no named queries (the skill stays prose-only, issuing catalog_query
+	// tool calls itself — today's behavior).
+	Queries []SkillQuery `json:"queries,omitempty"`
+
+	// Active gates whether the platform materializes this skill at all.
+	// Nil = active, preserving every existing producer's announce (S-1564
+	// finding: a deep-audit-style skill needs a wire spelling for
+	// ship-disabled/opt-in without inventing a sentinel value). A non-nil
+	// false means the platform seeds the skill but leaves it inactive until
+	// an operator flips it on.
+	Active *bool `json:"active,omitempty"`
+
+	// Parameters is RESERVED for the S-1590 enhancement (design doc §2.1.2):
+	// the general skill-parameter contract (daterange/enum/string/number)
+	// that extends the period-tokens-only v1 named-query mechanism. The
+	// field is defined now so the wire never needs a second version bump —
+	// v1 consumers (both producer and platform) MUST ignore it; no harness
+	// behavior reads it yet.
+	Parameters []SkillParameter `json:"parameters,omitempty"`
+}
+
+// SkillQuery is one named query a skill declares (design doc §2.1). The
+// harness runs it once at skill activation against the workspace data
+// session (the same S-1584 WorkspaceDataResolver the catalog_query tool
+// uses, so a named query inherits the workspace label-scope binding
+// automatically) and injects the result into the skill's context block under
+// this Name; skill prose refers to it as `{query:Name}` (a documentation
+// convention only — the harness does not substitute this token, the results
+// block is adjacent and named).
+type SkillQuery struct {
+	// Name is a slug, unique within the skill (e.g. "per_category"). It
+	// addresses the query's results block and the `{query:name}` prose
+	// convention.
+	Name string `json:"name"`
+
+	// Description documents what the query answers; carried through to
+	// validation/UI, not required for execution.
+	Description string `json:"description,omitempty"`
+
+	// SQL runs against the workspace data session. It may reference exactly
+	// two harness-substituted tokens, `{period_start}` and `{period_end}`
+	// (RFC3339 UTC, resolved by the harness — never model-supplied text; see
+	// design doc §2.1.1). A query that omits both tokens runs unbounded —
+	// legal, but validation warns on it for report-format skills.
+	SQL string `json:"sql"`
+
+	// MaxRows caps the rows the harness injects into context. Harness-clamped
+	// regardless of what's requested: default 50 when unset (0), hard cap
+	// 200.
+	MaxRows int `json:"max_rows,omitempty"`
+}
+
+// SkillParameter is one declared parameter a skill exposes (design doc
+// §2.1.2) — the general shape the period token (§2.1.1) is the first
+// instance of. RESERVED FOR V2 (S-1590): the type is defined here so the
+// wire never needs a second version bump, but no v1 harness turn reads or
+// binds it yet — v1 consumers ignore this field entirely.
+type SkillParameter struct {
+	// Name is referenced as {param:name} in query SQL once S-1590 lands.
+	Name string `json:"name"`
+
+	// Type is one of: daterange | enum | string | number.
+	Type string `json:"type"`
+
+	// Description carries tool-call-schema semantics — the same role a
+	// JSON-schema description plays in a tool definition: what the
+	// parameter MEANS, read by the router/LLM/UI, not just a form label.
+	Description string `json:"description,omitempty"`
+
+	// Required marks the parameter as mandatory before the skill's queries
+	// pre-run; a missing required parameter is a loud dispatch/activation
+	// validation error once S-1590 lands.
+	Required bool `json:"required,omitempty"`
+
+	// Default is the parameter's default value (as typed text; parsed per
+	// Type), used when the parameter is optional and unset.
+	Default string `json:"default,omitempty"`
+
+	// Values enumerates the legal values for Type == "enum"; unused for
+	// other types.
+	Values []string `json:"values,omitempty"`
 }
 
 // PromptArtifact is the leaf payload for an ArtifactPrompt — a reusable prompt

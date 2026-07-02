@@ -144,6 +144,20 @@ go test ./...   # embedded-NATS round-trip, no external server needed
    data plane (a solution reads via quack, publishes changes over NATS) — the
    tool *mechanism* is already proven with a stub; `revassure_query` is a data
    tool, blocked on quack.
+
+   **v0.4.0 (S-1587, contract landed; v4 harness consumer pending):**
+   `SkillArtifact` gained `Queries []SkillQuery` (named queries the v4 harness
+   runs once at skill activation against the workspace data session, results
+   injected into the skill's context block — design:
+   `v4` repo `docs/design/skill-named-queries.md`), `Active *bool` (nil =
+   active; an explicit `false` lets a skill ship disabled/opt-in — the S-1564
+   deep-audit finding), and `Parameters []SkillParameter` (RESERVED for the
+   S-1590 general skill-parameter enhancement — defined on the wire now, no v1
+   consumer reads it, so the wire needs only one version bump for both). All
+   three are additive/`omitempty`; a v0.3.0 producer's announce still parses
+   unchanged. Round-trip: `TestSkillWire_QueriesActiveParameters_RoundTrip`,
+   `TestSkillWire_ActiveNil_MeansActive`. **The v0.4.0 tag is not yet cut** —
+   consumers pin the commit until Ricardo cuts it.
 2. **Declarative artifact leaves** — the prompt, workflow and dashboard leaves
    now round-trip (`PromptArtifact` / `WorkflowArtifact` / `DashboardArtifact`,
    `TestDeclarativeArtifacts_RoundTrip`): each is pure control-plane content

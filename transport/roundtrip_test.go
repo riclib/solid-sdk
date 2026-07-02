@@ -246,6 +246,150 @@ func TestSkillWire_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestSkillWire_QueriesActiveParameters_RoundTrip proves the v0.4.0 additions
+// to SkillArtifact (S-1587; design: v4 repo docs/design/skill-named-queries.md)
+// round-trip intact: named Queries, an explicit Active:false, and a reserved
+// Parameters entry (the S-1590 general-parameter shape, defined on the wire
+// now but not yet consumed by any harness turn).
+func TestSkillWire_QueriesActiveParameters_RoundTrip(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	inactive := false
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "revassure",
+		DisplayName: "Revenue Assurance",
+		Version:     "0.1.0",
+		Skills: []contract.SkillArtifact{{
+			ID:           "revassure-deep-audit",
+			Name:         "Deep Audit",
+			Description:  "Opt-in deep reconciliation audit.",
+			Source:       "revassure",
+			Tags:         []string{"revassure", "report"},
+			OutputFormat: "report",
+			Body:         "# Deep Audit\n\nReconcile per {query:per_category} and {query:totals}.",
+			Active:       &inactive,
+			Queries: []contract.SkillQuery{
+				{
+					Name:        "per_category",
+					Description: "Findings grouped by category for the period.",
+					SQL:         "SELECT category, COUNT(*) AS cnt FROM report_weekly WHERE ts >= '{period_start}' AND ts < '{period_end}' GROUP BY category",
+					MaxRows:     50,
+				},
+				{
+					Name:        "totals",
+					Description: "All-time container inventory (deliberately unbounded).",
+					SQL:         "SELECT COUNT(*) AS cnt FROM containers",
+					MaxRows:     1,
+				},
+			},
+			Parameters: []contract.SkillParameter{{
+				Name:        "container",
+				Type:        "enum",
+				Description: "Which container to scope the audit to.",
+				Required:    false,
+				Default:     "secrets",
+				Values:      []string{"secrets", "billing", "crm"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Skills) != 1 {
+			t.Fatalf("assembled skills = %+v, want one", sol.Skills)
+		}
+		sk := sol.Skills[0]
+		if sk.Active == nil || *sk.Active != false {
+			t.Fatalf("skill Active = %v, want pointer to false", sk.Active)
+		}
+		if len(sk.Queries) != 2 {
+			t.Fatalf("skill queries = %+v, want 2", sk.Queries)
+		}
+		q0 := sk.Queries[0]
+		if q0.Name != "per_category" || q0.MaxRows != 50 || !strings.Contains(q0.SQL, "{period_start}") {
+			t.Fatalf("query[0] did not round-trip: %+v", q0)
+		}
+		q1 := sk.Queries[1]
+		if q1.Name != "totals" || q1.MaxRows != 1 {
+			t.Fatalf("query[1] did not round-trip: %+v", q1)
+		}
+		if len(sk.Parameters) != 1 {
+			t.Fatalf("skill parameters = %+v, want 1", sk.Parameters)
+		}
+		p0 := sk.Parameters[0]
+		if p0.Name != "container" || p0.Type != "enum" || p0.Default != "secrets" || len(p0.Values) != 3 {
+			t.Fatalf("parameter did not round-trip: %+v", p0)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+}
+
+// TestSkillWire_ActiveNil_MeansActive proves the zero-value contract: a skill
+// published without setting Active round-trips with a nil pointer, which
+// consumers must treat as active (preserving every pre-v0.4.0 producer's
+// behavior — S-1587).
+func TestSkillWire_ActiveNil_MeansActive(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "revassure",
+		DisplayName: "Revenue Assurance",
+		Version:     "0.1.0",
+		Skills: []contract.SkillArtifact{{
+			ID:          "revassure-weekly-check",
+			Name:        "Weekly Check",
+			Description: "Reconcile the week's signals.",
+			Source:      "revassure",
+			Body:        "# Weekly check",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Skills) != 1 {
+			t.Fatalf("assembled skills = %+v, want one", sol.Skills)
+		}
+		if sol.Skills[0].Active != nil {
+			t.Fatalf("skill Active = %v, want nil (= active)", sol.Skills[0].Active)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+}
+
 // TestDeclarativeArtifacts_RoundTrip proves the three control-plane declarative
 // wires (prompt, workflow, dashboard) announce as their own leaves and assemble
 // back with their Body intact — alongside a skill, to show the tree carries all
