@@ -135,7 +135,7 @@ type SkillArtifact struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
-	Source       string   `json:"source,omitempty"`        // the solution that ships it
+	Source       string   `json:"source,omitempty"` // the solution that ships it
 	Tags         []string `json:"tags,omitempty"`
 	OutputFormat string   `json:"output_format,omitempty"` // e.g. "report"
 	Body         string   `json:"body"`                    // the markdown instruction set
@@ -302,13 +302,22 @@ type CatalogArtifact struct {
 // labels, sql}); the v4 side parses it. It is a handful of fields plus one SQL
 // statement — well under MaxArtifactSize — so it sits comfortably in one KV
 // leaf.
+//
+// A LOAD-STAGE projection (stage: load) is also the solution's load declaration
+// (§10): it may additionally carry stage, source_glob, source_kind, and a
+// layout block (path_template + bucket_evidence) describing the source's
+// storage physics per variant. See the v4 catalog.ProjectionConfig /
+// LayoutConfig for the authoritative field meaning.
 type ProjectionArtifact struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Source      string   `json:"source,omitempty"` // the solution that ships it
 	Tags        []string `json:"tags,omitempty"`
-	Body        string   `json:"body"` // the projection YAML: {target_catalog, source, labels, sql}
+	// Body is the projection YAML. Snapshot projection: {target_catalog, source,
+	// labels, sql}. Load-stage projection (§10): additionally {stage: load,
+	// source_glob, source_kind, layout:{path_template, bucket_evidence}}.
+	Body string `json:"body"`
 }
 
 // JobArtifact is the leaf payload for an ArtifactJob — a job definition the
