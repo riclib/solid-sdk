@@ -82,6 +82,7 @@ a skill; the agent executes):
 | `solidsdk icon search` / `icon validate` | deterministic | `search` is the proven, already-shipped pattern; `validate` checks an icon name resolves before it reaches a build |
 | `solidsdk skill scaffold` / `skill validate` | deterministic | `new solution` at skill granularity + a focused `doctor` |
 | `solidsdk dashboard validate` / `workflow validate` | deterministic | the **executable form of the `docs/sdk/` contracts** — see below |
+| `solidsdk dashboard smoke` | deterministic | `validate` + data: run every widget query against the solution's fixture dataset (`generate.sql`), catching what static validation can't — DECIMAL-in-chart scans, missing/renamed columns, empty-result degradation — see below |
 | `solidsdk install skills` | deterministic | install/refresh the skill-pack into the repo (the `sync`/`teach` write) |
 | `solidsdk claudemd update` | deterministic | (re)write the generic convention `CLAUDE.md`s from the version-locked teaching |
 | `solidsdk migrate` | **Claude-driven** | walk the repo from its current SDK conventions to the bumped version — "fork without the fork tax", delivered by the tool, not `git merge` |
@@ -99,6 +100,17 @@ claiming "nothing implemented yet" long after the substrate shipped, a breaking
 heatmap-axes change under-documented, dead worked-example paths, and a workflow
 "goal seam" helper that never existed. A `solidsdk dashboard validate <file>` /
 `workflow validate <file>` **cannot** drift the same way — it *is* the contract.
+
+`dashboard smoke` is `validate`'s data-plane twin, and it restores a capability
+the port-out lost: v4's in-tree revassure once had a `verify_test.go` that built
+the fixture DuckDB and ran every dashboard widget query against it — the test
+that caught the DECIMAL-in-chart bug. The fork has no equivalent (confirmed in
+the S-1618 doc sweep, 2026-07-05): today no fork test executes widget queries
+against data, so a query that validates but can't scan its result types ships
+silently. As a CLI verb (`smoke <dashboard.yaml> --fixtures <generate.sql>`, or
+repo-wide), every fork inherits the check at once and it slots into partner CI —
+another case of the binary being the authority instead of a per-fork test
+someone has to remember to copy.
 
 And the validators **already half-exist**: v4's `infra/dashboard/validate.go` and
 `domains/workflow/yaml.go` (`KnownFields(true)` strict decode) do this work today,
