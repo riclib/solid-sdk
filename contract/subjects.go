@@ -124,3 +124,30 @@ func FireResultSubject(runKey string) string {
 // FireResultSubjectAll is the result stream's capture filter across every fire
 // (`solid.fire.result.>`) — the subject set the durable result stream binds.
 func FireResultSubjectAll() string { return "solid.fire.result.>" }
+
+// StoreCallSubject is the request-reply subject a solution calls the governed
+// store proxy on: `solid.store.call.<solution>.<op>`, op ∈ exec | query |
+// test_connection. It is the INVERSE direction of ToolSubject (solution→platform,
+// not platform→solution) — the first solution→platform request-reply service —
+// and the PLATFORM is the responder (binds a queue group so instances share the
+// load).
+//
+// Like the tool + runnable + fire subjects, the shape IS the authz boundary: the
+// solution name lives in the subject, not a bare solid.store.<op>, so a partner
+// account can be granted publish only on StoreCallSubjectPrefix and the identity
+// claim becomes account-enforceable. Until per-account permissions are
+// provisioned (dev/embedded NATS), the segment is advisory: the payload
+// StoreCallRequest.Solution MUST match the subject's solution segment and the
+// platform rejects a mismatch (StoreCodeNotGranted). S-1706 (namespace
+// reservation) covers announced-name squatting.
+func StoreCallSubject(solution, op string) string {
+	return fmt.Sprintf("solid.store.call.%s.%s", solution, op)
+}
+
+// StoreCallSubjectPrefix is the wildcard a partner account is granted publish on
+// to reach the store proxy for all of a solution's ops
+// (`solid.store.call.<solution>.>`) — the single permission that makes the
+// solution's identity claim in the subject account-enforceable.
+func StoreCallSubjectPrefix(solution string) string {
+	return fmt.Sprintf("solid.store.call.%s.>", solution)
+}
