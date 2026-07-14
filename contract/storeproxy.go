@@ -137,4 +137,12 @@ const (
 
 	// StoreCodeTimeout — the store's configured QueryTimeout elapsed server-side.
 	StoreCodeTimeout = "timeout"
+
+	// StoreCodeDryRun — the store is configured exec-dry-run on the platform: the
+	// grant check passed and the statement was audit-logged platform-side, but it
+	// was NOT executed and no credential was touched. Exec-only (query and
+	// test_connection still run real). Callers MUST treat this as "not executed",
+	// never as success — e.g. solid-mon lands it in kpi_export_runs.export_error
+	// so a dry run can never masquerade as a real export.
+	StoreCodeDryRun = "dry_run"
 )
