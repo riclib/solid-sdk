@@ -133,6 +133,74 @@ res, err := transport.CallTool(ctx, nc, "revassure", "revassure_query", req)  //
 go test ./...   # embedded-NATS round-trip, no external server needed
 ```
 
+## Your quack connection (the connect op + the reconnect contract)
+
+A solution bound to a workspace gets a quack connection to that workspace's
+engine — full SQL, server-side execution, statement-logged (the platform's
+`docs/sdk/solution-stores.md` is the normative doc). You never configure an
+engine address or token; you ask the platform over the store-proxy wire
+(S-1721 platform side, S-1728 this mirror):
+
+| | |
+|---|---|
+| Subject | `solid.store.call.<solution>.connect` — the store-call family; the S-1706 per-account publish prefix covers it, no extra grant |
+| Request | `{"solution":"<name>","workspace":"<slug>","op":"connect"}` — NO `store`/`statement`/`args`; smuggling any is the uniform denial |
+| Grant | the workspace **binding IS the grant** (the workspace draws your solution); there is no store hop |
+| Reply (granted) | `{"uri":"quack:localhost:<port>","token":"<per-boot-token>","tls":false,"duration_ms":N}` |
+| Reply (denied) | `{"error":"not granted","code":"not_granted"}` — byte-identical for unknown workspace / not bound / malformed (no existence leak) |
+| Reply (engine down) | `{"error":"workspace engine unavailable","code":"exec_failed"}` |
+| Transport failure | Go error at the caller — policy (`code`) vs outage (error), same split as `StoreCall` |
+
+```go
+res, err := transport.QuackConnect(ctx, nc, "revassure", "lmt")
+// err != nil            → transport outage (platform down); retry/backoff
+// res.Code != ""        → policy denial or engine failure; read res.Code
+// otherwise             → connect a quack client to res.URI with res.Token
+```
+
+**The reconnect contract.** `token` is minted **per engine boot** and engines
+are disposable by design — an LRU eviction, a compaction, a platform restart,
+or a crash retires the engine, and the next boot mints a new token (usually on
+a new port). Auth failures or connection refusals on an established handle are
+the normal signal, not an incident. Treat `{uri, token}` as per-session state:
+on ANY connection failure, re-run `transport.QuackConnect` and reconnect. Do
+not persist handles across your own restarts, do not share them between
+processes, do not backoff-forever (the re-handshake is cheap — the engine
+re-boots in ~73ms on first touch), and **never log the token**. In-flight
+statements on a retired engine fail; make your writes idempotent (upsert
+shapes — `INSERT OR REPLACE`, `MERGE INTO`).
+
+**Opening the connection.** The SDK core module deliberately carries no
+DuckDB/quack driver — CGO engines are reserved for a separate module (see
+`CLAUDE.md`; `docs/ideas/sdk-ships-the-engines.md` is that future). Until it
+lands, open the connection in your solution with your own pinned
+`duckdb-go` + quack extension, the same way the platform's own client does:
+
+```go
+db, _ := sql.Open("duckdb", "")   // local handle = transport only
+db.SetMaxOpenConns(1)             // keep the quack extension loaded on the one warmed conn
+// SET extension_directory = '<your staged quack+httpfs dir>';
+// SET autoinstall_known_extensions = false;  LOAD quack;   -- air-gapped, no network INSTALL
+
+// every statement ships server-side via quack_query, with the attribution marker:
+stmt := contract.StatementMarker("revassure") + "INSERT INTO revassure.interestingevents SELECT ..."
+_, err := db.ExecContext(ctx, fmt.Sprintf(
+    "SELECT * FROM quack_query('%s', '%s', token=>'%s', disable_ssl=>true)",
+    res.URI, escapeSingleQuotes(stmt), escapeSingleQuotes(res.Token)))
+// on a connection/auth failure here: re-run transport.QuackConnect and retry (reconnect contract)
+```
+
+`disable_ssl=>true` is load-bearing while `tls` is false (the pinned quack
+extension has no server-side TLS; engines are loopback-only, so your daemon
+connects same-box). When the reply's `tls` flips true, connect with
+`disable_ssl=>false` — the wire shape does not change.
+
+**Your statements are logged** (the peek doctrine: observable, not prevented).
+Attribution is engine-grain; prefix every statement with
+`contract.StatementMarker(<your-solution-id>)` — the `/* solid:solution=<id> */`
+comment survives verbatim into the statement log and gives the operator
+statement-level attribution.
+
 ## Next wires (each lands with a consumer)
 
 1. **Skill loop (control plane first)** — the skill leaf already round-trips
