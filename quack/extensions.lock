@@ -1,0 +1,37 @@
+# DuckDB extension pins for the SDK's quack client — quack (the wire protocol)
+# and httpfs (its transport). COPIED IN LOCKSTEP from solid's
+# infra/duckdb/extensions/extensions.lock: the client and the serving engine
+# must run the same quack protocol and the extensions are ABI-keyed to the
+# exact DuckDB version, so duckdb_version, duckdb_go_version (the go.mod pin),
+# and these SHAs move together with the platform's — never independently.
+#
+# The .duckdb_extension.gz binaries are NOT committed (see .gitignore);
+# scripts/duckdb-fetch.sh materialises them at BUILD time from
+# extensions.duckdb.org, verified against these SHA256s. //go:embed then bakes
+# them into the consuming binary, so the *release* binary is self-contained
+# and air-gapped: only the build needs network, never the runtime.
+duckdb_version: 1.5.3
+duckdb_go_version: v2.10503.1
+extensions:
+  - name: quack
+    archs:
+      linux_amd64:
+        sha256: 609be01482fde0bc1d99a64c7ae87134a134638c9c45e39285c64cd57d953f0c
+        size: 11445590
+      linux_arm64:
+        sha256: 91f500eeb19bcaf184b325e80918fa314c024caf111be78bb4a498635337a95f
+        size: 10087604
+      osx_arm64:
+        sha256: 44be6fc3eac2b4cfd11a6b0e96e5e9768fc62b1529d6d18f82cd6450473e83c0
+        size: 7745277
+  - name: httpfs
+    archs:
+      linux_amd64:
+        sha256: e33a4085f04b84bcbb25c27dec3a821731e4d2476b93cfc84aa46c963098b882
+        size: 7386635
+      linux_arm64:
+        sha256: bde75aadc4ebf9edb4b9fecf4aac6025f35fdae56116b2673b0b4990242c3a02
+        size: 7231623
+      osx_arm64:
+        sha256: d328b23388b9e74081a751c52a43430df83a9fba9fc2dd76db6a4a7c98430486
+        size: 5531125

@@ -2,5 +2,9 @@
 /dist/
 *.test
 
+# DuckDB extension binaries — fetched at build time (scripts/duckdb-fetch.sh),
+# pinned by quack/extensions.lock. Never committed.
+quack/*/*.duckdb_extension.gz
+
 # OS / editor
 .DS_Store
