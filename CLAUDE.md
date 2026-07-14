@@ -38,11 +38,9 @@ helpers. Read `README.md` for the why; this is the working guide.
 ## Logging — every solution logs via `solid-sdk/log` (S-1462)
 
 Logging is **baseline**: every solution does it, so it lives IN the core SDK
-module as a normal package (`solid-sdk/log`), NOT a separate Go module. Separate
-modules are reserved for real CGO cost (duckdb/quack/sqlite); a pure-Go slog
-wrapper does not qualify. The pretty-printer deps
-(`dusted-go/logging`, `phsym/console-slog`) landing on the core module is fine
-and intended — and the package is CGO-free.
+module as a normal package (`solid-sdk/log`), NOT a separate Go module. The
+pretty-printer deps (`dusted-go/logging`, `phsym/console-slog`) landing on the
+core module is fine and intended — and the package is CGO-free.
 
 **Logs do NOT travel the bus.** The NATS log handler was removed: shipping logs
 over NATS needed a drop-on-full volume guard precisely *because* a message bus is
@@ -68,10 +66,41 @@ make a partner record correlate with a platform record wherever both are read.
 `v2.12.2`). When v4 bumps them, bump here in lockstep — a skew breaks the
 eventual shared build.
 
+## Quack — the SDK ships the engine client (S-1728)
+
+**One module, CGO in — decided 2026-07-14.** The SDK is basically useless
+without quack, so the engine client is a normal package (`solid-sdk/quack`),
+not a separate Go module: most partners start from solid-kit, which carries
+the build tooling, and submodule complexity buys nothing. (This supersedes the
+earlier "separate modules for CGO cost" doctrine;
+`docs/ideas/sdk-ships-the-engines.md` remains the wider store/duck-primitives
+future.)
+
+- **Pins are a wire contract, lockstep with the platform.**
+  `duckdb-go/v2` (go.mod) and the quack/httpfs extension SHAs
+  (`quack/extensions.lock`) are copied from the platform repo's
+  `infra/duckdb/extensions/extensions.lock` — the client and the serving
+  engine must speak the same quack protocol and extensions are ABI-keyed to
+  the exact DuckDB version. When the platform bumps DuckDB, bump both here in
+  the same change, never incidentally. Same rule as the NATS pin above.
+- **Air-gapped by construction.** Extension binaries are NOT committed;
+  `scripts/duckdb-fetch.sh` stages them at BUILD time (SHA-verified against
+  the lock), `//go:embed` bakes them into the consuming binary, and the
+  runtime materializes them to disk on first connect. There is deliberately
+  NO network INSTALL fallback — a failure to stage is a build error, never a
+  runtime download.
+- **`quack.Conn` is the paved road**: handshake (never a configured
+  address/token), reconnect contract (re-handshake as a boot-identity probe:
+  retry once only when the platform hands back a NEW {uri, token}; a failure
+  on an unchanged handle is the statement's own — no blind DML retry, no
+  error-string matching), statement marker on every statement, `disable_ssl`
+  driven by the reply's `tls`. The token is never logged and never persisted.
+
 ## Testing
 
 ```bash
-go test ./...   # embedded JetStream NATS server, no external dependency
+scripts/duckdb-fetch.sh   # once per checkout/arch: stage the pinned quack+httpfs extensions
+go test ./...             # embedded JetStream NATS server + a real in-process quack engine
 ```
 
 The round-trip test (`transport/roundtrip_test.go`) starts an in-process

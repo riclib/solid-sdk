@@ -41,14 +41,12 @@ import (
 // processes, and NEVER log the token (this helper never does; keep your
 // error wrapping token-free too).
 //
-// Connecting with the result: the SDK deliberately carries no DuckDB/quack
-// driver (CGO engines are reserved for a separate module — see CLAUDE.md);
-// open the connection with your own pinned duckdb-go + quack extension the
-// way the platform's client does — single connection (MaxOpenConns(1)),
-// token auth, disable_ssl=>true while res.TLS is false — and prefix every
-// statement with contract.StatementMarker(solution) for statement-log
-// attribution. See ARCHITECTURE.md "Your quack connection" for the full
-// pattern.
+// Connecting with the result: use the quack package — quack.Connect wraps
+// this handshake and owns the whole contract (pinned duckdb-go + air-gapped
+// quack extension, disable_ssl driven by res.TLS, the statement marker on
+// every statement, and the reconnect contract applied automatically). This
+// helper stays public as the raw handshake for callers composing their own
+// client. See ARCHITECTURE.md "Your quack connection".
 func QuackConnect(ctx context.Context, nc *nats.Conn, solution, workspace string) (contract.QuackConnectResult, error) {
 	var zero contract.QuackConnectResult
 	if solution == "" {

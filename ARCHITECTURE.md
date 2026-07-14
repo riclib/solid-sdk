@@ -170,30 +170,32 @@ re-boots in ~73ms on first touch), and **never log the token**. In-flight
 statements on a retired engine fail; make your writes idempotent (upsert
 shapes — `INSERT OR REPLACE`, `MERGE INTO`).
 
-**Opening the connection.** The SDK core module deliberately carries no
-DuckDB/quack driver — CGO engines are reserved for a separate module (see
-`CLAUDE.md`; `docs/ideas/sdk-ships-the-engines.md` is that future). Until it
-lands, open the connection in your solution with your own pinned
-`duckdb-go` + quack extension, the same way the platform's own client does:
+**Opening the connection — the `quack` package (the paved road).** The SDK
+ships the engine client: pinned `duckdb-go` (lockstep with the platform's
+go.mod) plus the quack + httpfs extensions, embedded air-gapped (SHA-pinned by
+`quack/extensions.lock`, staged at build time by `scripts/duckdb-fetch.sh`,
+materialized at first use — the runtime never touches the network). One call
+owns the whole contract:
 
 ```go
-db, _ := sql.Open("duckdb", "")   // local handle = transport only
-db.SetMaxOpenConns(1)             // keep the quack extension loaded on the one warmed conn
-// SET extension_directory = '<your staged quack+httpfs dir>';
-// SET autoinstall_known_extensions = false;  LOAD quack;   -- air-gapped, no network INSTALL
+conn, err := quack.Connect(ctx, nc, "revassure", "lmt")   // handshake inside
+if err != nil { ... }                                     // outage OR denial — no Conn without a grant
+defer conn.Close()
 
-// every statement ships server-side via quack_query, with the attribution marker:
-stmt := contract.StatementMarker("revassure") + "INSERT INTO revassure.interestingevents SELECT ..."
-_, err := db.ExecContext(ctx, fmt.Sprintf(
-    "SELECT * FROM quack_query('%s', '%s', token=>'%s', disable_ssl=>true)",
-    res.URI, escapeSingleQuotes(stmt), escapeSingleQuotes(res.Token)))
-// on a connection/auth failure here: re-run transport.QuackConnect and retry (reconnect contract)
+// statements ship server-side, marker-prefixed automatically:
+err = conn.Exec(ctx, "INSERT INTO revassure.interestingevents SELECT ...")
+rows, err := conn.Query(ctx, "SELECT ... FROM revassure.interestingevents")
 ```
 
-`disable_ssl=>true` is load-bearing while `tls` is false (the pinned quack
-extension has no server-side TLS; engines are loopback-only, so your daemon
-connects same-box). When the reply's `tls` flips true, connect with
-`disable_ssl=>false` — the wire shape does not change.
+`Conn` applies the reconnect contract for you: on a failed statement it
+re-runs the handshake as a boot-identity probe — a NEW `{uri, token}` means
+the engine was retired, so it reconnects and retries once, invisibly; the SAME
+handle means the failure was the statement's own, returned as-is (no blind DML
+retry, no error-string matching). It also drives `disable_ssl` from the
+reply's `tls` field (loopback/plaintext today; when the platform flips `tls`
+true the client speaks SSL with no wire change) and never logs or persists the
+token. `transport.QuackConnect` stays public as the raw handshake for callers
+composing their own client.
 
 **Your statements are logged** (the peek doctrine: observable, not prevented).
 Attribution is engine-grain; prefix every statement with
