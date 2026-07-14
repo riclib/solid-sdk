@@ -127,7 +127,7 @@ func FireResultSubjectAll() string { return "solid.fire.result.>" }
 
 // StoreCallSubject is the request-reply subject a solution calls the governed
 // store proxy on: `solid.store.call.<solution>.<op>`, op ∈ exec | query |
-// test_connection. It is the INVERSE direction of ToolSubject (solution→platform,
+// test_connection | connect. It is the INVERSE direction of ToolSubject (solution→platform,
 // not platform→solution) — the first solution→platform request-reply service —
 // and the PLATFORM is the responder (binds a queue group so instances share the
 // load).

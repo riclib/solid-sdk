@@ -1,5 +1,7 @@
 package contract
 
+import "fmt"
+
 // The store-proxy wire — the FIRST solution→platform request-reply service.
 // Every other live wire today runs platform→solution (CallTool, runnable-run,
 // fire-run) or is a KV announce tree; here the solution is the caller and the
@@ -99,6 +101,21 @@ const (
 	// StoreOpTestConnection delegates to Store.TestConnection — nearly free,
 	// carries no statement.
 	StoreOpTestConnection = "test_connection"
+
+	// StoreOpConnect is the workspace-engine connect handshake (S-1721/S-1728):
+	// a solution bound to a workspace asks the platform for a quack connection to
+	// that workspace's engine. It rides the SAME subject family
+	// (solid.store.call.<solution>.connect), so the per-account publish prefix
+	// (StoreCallSubjectPrefix, S-1706) covers it with no extra grant.
+	//
+	// connect is NOT a store op: the request carries solution + workspace + op
+	// ONLY — a connect that smuggles Store/Statement/Args is denied with the
+	// uniform not_granted (no existence leak). The BINDING is the grant: the
+	// named workspace must draw the calling solution; there is no store hop, and
+	// workspace engines never appear in a workspace's store-grant list. The
+	// reply is QuackConnectResult, not StoreCallResult. Use transport.QuackConnect,
+	// which builds the request so smuggling is impossible by construction.
+	StoreOpConnect = "connect"
 )
 
 // Denial/failure codes — StoreCallResult.Code. They mirror store.Service's error
@@ -146,3 +163,74 @@ const (
 	// so a dry run can never masquerade as a real export.
 	StoreCodeDryRun = "dry_run"
 )
+
+// QuackConnectResult is the reply payload of the connect op (StoreOpConnect,
+// S-1721/S-1728). It MIRRORS the platform's app/storeproxy.QuackConnectResult
+// — the platform shipped first and its responder is the source of truth; the
+// FIELD NAMES (json tags) ARE THE WIRE CONTRACT — do not rename, additive only.
+//
+// Semantics follow StoreCallResult exactly: a policy denial or engine failure
+// comes back as a SUCCESSFUL reply with Error + Code set (not_granted for
+// unknown workspace / not bound / malformed connect — one uniform message, no
+// existence leak; exec_failed "workspace engine unavailable" when the engine
+// could not boot); a transport failure (no responder, NATS timeout) is a Go
+// error at the caller. The caller tells policy from outage.
+//
+// THE RECONNECT CONTRACT: Token is minted PER ENGINE BOOT and engines are
+// disposable by design — an LRU eviction, a compaction, a platform restart, or
+// a crash retires the engine, and the next boot mints a new token (usually on
+// a new port). Treat {URI, Token} as per-session state: on any connection
+// failure, re-run the handshake (transport.QuackConnect) and retry. Never
+// persist a handle across your own restarts, never share it between
+// processes, and NEVER log the token.
+type QuackConnectResult struct {
+	// Error is a safe, human-readable failure message when the handshake was
+	// denied or the engine could not be resolved. Empty on success. Never
+	// carries a credential, path, or connection detail.
+	Error string `json:"error,omitempty"`
+
+	// Code is the machine-readable denial/failure code: StoreCodeNotGranted
+	// (the binding-is-the-grant check failed, or the connect smuggled store
+	// fields) or StoreCodeExecFailed (engine boot/resolve failed). Empty on
+	// success.
+	Code string `json:"code,omitempty"`
+
+	// URI is the engine's quack URI (e.g. quack:localhost:9601). Loopback by
+	// construction today — the pinned quack extension has no server-side TLS,
+	// so the platform refuses to bind engines off-box.
+	URI string `json:"uri,omitempty"`
+
+	// Token is the engine's PER-BOOT auth token: minted at engine boot,
+	// resolved only through this handshake, never configured and NEVER logged.
+	// It stops working when the engine reboots/evicts — re-run the handshake
+	// on connection failure (the reconnect contract above).
+	Token string `json:"token,omitempty"`
+
+	// TLS reports whether the engine serves TLS. Always false today (loopback
+	// engines, no server-side TLS in the pinned quack extension) — connect
+	// with disable_ssl=>true. When it flips true, connect with
+	// disable_ssl=>false; the wire shape does not change.
+	TLS bool `json:"tls"`
+
+	// Duration is the server-side handling time in milliseconds (includes an
+	// engine boot on first access — ~73ms measured).
+	Duration int64 `json:"duration_ms"`
+}
+
+// StatementMarker is the statement-log attribution prefix for statements a
+// solution runs over its quack connection (docs: the platform's
+// docs/sdk/solution-stores.md, "Your statements are logged"). The serving
+// engine logs statements at engine grain (= workspace grain) and cannot tell
+// which caller a wire connection belongs to; prefixing every DML statement
+// with this marker — the comment survives verbatim into the log line — gives
+// the platform operator statement-level attribution:
+//
+//	stmt := contract.StatementMarker("revassure") + "INSERT INTO revassure.interestingevents SELECT ..."
+//
+// The marker is a convention, not enforcement (the peek doctrine: observable,
+// not prevented) — but a solution that omits it is indistinguishable in the
+// statement log from every other caller on the workspace, so use it on every
+// statement.
+func StatementMarker(solution string) string {
+	return fmt.Sprintf("/* solid:solution=%s */ ", solution)
+}
