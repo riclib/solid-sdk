@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# scripts/duckdb-fetch.sh — stage the quack-client DuckDB extension binaries for
-# ONE arch into the quack/ embed dirs, verified against quack/extensions.lock.
-# Idempotent: files already present and SHA-matching the lock are left alone.
+# scripts/duckdb-fetch.sh — refresh the quack-client DuckDB extension binaries
+# for ONE arch into the quack/ embed dirs, verified against
+# quack/extensions.lock. Idempotent: files already present and SHA-matching
+# the lock are left alone.
 #
-# The .duckdb_extension.gz binaries are NOT committed to git (see .gitignore) —
-# this script materialises them at BUILD time from extensions.duckdb.org,
-# pinned by the SHA256s in the lockfile (which is copied in lockstep from
-# solid's infra/duckdb/extensions/extensions.lock — see quack/extensions.lock
-# header). `//go:embed` then bakes them into the consuming binary, so a
-# *release* binary stays self-contained and air-gapped: only the build needs
-# network, never the runtime. Run this once before `go build` / `go test`.
+# The .duckdb_extension.gz binaries ARE committed (deliberately unlike solid's
+# fetch-at-build packaging: the SDK is consumed as a Go module, and the module
+# zip must carry the //go:embed payload or every consumer importing quack
+# fails to build). This script is the REFRESH/VERIFY tool for a pin bump: copy
+# the new pins from solid's infra/duckdb/extensions/extensions.lock into
+# quack/extensions.lock, delete the stale .gz files, run this per arch, and
+# commit the result. A plain checkout builds with no network.
 #
 # Usage: scripts/duckdb-fetch.sh [arch]
 #   arch defaults to the host build arch (from `go env GOOS GOARCH`).

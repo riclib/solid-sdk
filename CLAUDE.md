@@ -83,12 +83,15 @@ future.)
   engine must speak the same quack protocol and extensions are ABI-keyed to
   the exact DuckDB version. When the platform bumps DuckDB, bump both here in
   the same change, never incidentally. Same rule as the NATS pin above.
-- **Air-gapped by construction.** Extension binaries are NOT committed;
-  `scripts/duckdb-fetch.sh` stages them at BUILD time (SHA-verified against
-  the lock), `//go:embed` bakes them into the consuming binary, and the
-  runtime materializes them to disk on first connect. There is deliberately
-  NO network INSTALL fallback — a failure to stage is a build error, never a
-  runtime download.
+- **Air-gapped by construction — binaries COMMITTED, unlike solid.** solid
+  gitignores its extension binaries and fetches at build time; the SDK cannot
+  (it is consumed as a Go module — the module zip must carry the `//go:embed`
+  payload or every consumer importing quack fails to build; v0.6.0 shipped
+  that mistake and is retracted). The `.gz` binaries live in git next to the
+  lock; `scripts/duckdb-fetch.sh` is the refresh/verify tool for a pin bump.
+  `//go:embed` bakes them into the consuming binary and the runtime
+  materializes them to disk on first connect. There is deliberately NO
+  network INSTALL fallback and no runtime download.
 - **`quack.Conn` is the paved road**: handshake (never a configured
   address/token), reconnect contract (re-handshake as a boot-identity probe:
   retry once only when the platform hands back a NEW {uri, token}; a failure
@@ -99,8 +102,7 @@ future.)
 ## Testing
 
 ```bash
-scripts/duckdb-fetch.sh   # once per checkout/arch: stage the pinned quack+httpfs extensions
-go test ./...             # embedded JetStream NATS server + a real in-process quack engine
+go test ./...   # embedded JetStream NATS server + a real in-process quack engine
 ```
 
 The round-trip test (`transport/roundtrip_test.go`) starts an in-process

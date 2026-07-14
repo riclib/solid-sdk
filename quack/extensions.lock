@@ -5,11 +5,13 @@
 # exact DuckDB version, so duckdb_version, duckdb_go_version (the go.mod pin),
 # and these SHAs move together with the platform's — never independently.
 #
-# The .duckdb_extension.gz binaries are NOT committed (see .gitignore);
-# scripts/duckdb-fetch.sh materialises them at BUILD time from
-# extensions.duckdb.org, verified against these SHA256s. //go:embed then bakes
-# them into the consuming binary, so the *release* binary is self-contained
-# and air-gapped: only the build needs network, never the runtime.
+# The .duckdb_extension.gz binaries ARE committed alongside this lockfile —
+# deliberately unlike solid's fetch-at-build packaging: the SDK is consumed as
+# a Go module, and the module zip must carry the //go:embed payload or every
+# consumer importing quack fails to build. scripts/duckdb-fetch.sh refreshes
+# and SHA-verifies them against these pins on a version bump. //go:embed bakes
+# them into the consuming binary, so a solution binary is self-contained and
+# air-gapped: the runtime never touches the network.
 duckdb_version: 1.5.3
 duckdb_go_version: v2.10503.1
 extensions:

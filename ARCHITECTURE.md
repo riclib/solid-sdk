@@ -172,10 +172,10 @@ shapes — `INSERT OR REPLACE`, `MERGE INTO`).
 
 **Opening the connection — the `quack` package (the paved road).** The SDK
 ships the engine client: pinned `duckdb-go` (lockstep with the platform's
-go.mod) plus the quack + httpfs extensions, embedded air-gapped (SHA-pinned by
-`quack/extensions.lock`, staged at build time by `scripts/duckdb-fetch.sh`,
-materialized at first use — the runtime never touches the network). One call
-owns the whole contract:
+go.mod) plus the quack + httpfs extensions, committed SHA-pinned
+(`quack/extensions.lock`), embedded via `//go:embed`, and materialized at
+first use — the runtime never touches the network. One call owns the whole
+contract:
 
 ```go
 conn, err := quack.Connect(ctx, nc, "revassure", "lmt")   // handshake inside
