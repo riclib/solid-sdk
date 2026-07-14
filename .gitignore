@@ -2,9 +2,11 @@
 /dist/
 *.test
 
-# DuckDB extension binaries — fetched at build time (scripts/duckdb-fetch.sh),
-# pinned by quack/extensions.lock. Never committed.
-quack/*/*.duckdb_extension.gz
+# NOTE: quack/*/*.duckdb_extension.gz ARE committed (unlike solid, which
+# fetches at build time): the SDK is consumed as a Go module, and the module
+# zip must carry the //go:embed payload or every consumer importing quack
+# fails to build (the v0.6.0 lesson — retracted). scripts/duckdb-fetch.sh is
+# the refresh/verify tool for pin bumps, not a build prerequisite.
 
 # OS / editor
 .DS_Store

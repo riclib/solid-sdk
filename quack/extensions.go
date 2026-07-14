@@ -1,8 +1,10 @@
 // Air-gap-safe staging of the DuckDB extensions the quack client needs (quack +
 // httpfs), embedded into the binary at compile time.
 //
-// The extensions are staged per arch by scripts/duckdb-fetch.sh (build-time
-// network, SHA-verified against extensions.lock), embedded via //go:embed, and
+// The extensions are COMMITTED per arch (SHA-pinned by extensions.lock,
+// refreshed by scripts/duckdb-fetch.sh on a pin bump — committed rather than
+// fetched-at-build because the SDK is consumed as a Go module and the module
+// zip must carry the //go:embed payload), embedded via //go:embed, and
 // materialized to an extension-install layout directory the first time a
 // connection opens. NO RUNTIME NETWORK ACCESS — a solution binary works
 // offline, in CI, and on sovereign estates whose runtimes can't phone home to
@@ -97,7 +99,7 @@ func materializeInstallDir(baseDir string) (string, error) {
 	for _, name := range clientExtensions {
 		gz, err := embedded.ReadFile(archDir + "/" + name + extSuffix)
 		if err != nil {
-			return "", fmt.Errorf("quack: %s not embedded for arch %s — run scripts/duckdb-fetch.sh before building: %w", name, archDir, err)
+			return "", fmt.Errorf("quack: %s not embedded for arch %s: %w", name, archDir, err)
 		}
 		payload, err := decompressExtension(gz)
 		if err != nil {

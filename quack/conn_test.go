@@ -5,10 +5,6 @@ package quack
 // responder over embedded NATS. Proves the full S-1728 contract: handshake →
 // statements server-side via quack_query → the reconnect contract when the
 // engine is retired and reborn with a new per-boot token on a new port.
-//
-// Prerequisite: scripts/duckdb-fetch.sh has staged the extension binaries for
-// this arch (a normal build/test does this once; the embed fails loudly
-// otherwise).
 
 import (
 	"context"

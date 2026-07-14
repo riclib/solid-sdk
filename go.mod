@@ -2,6 +2,12 @@ module github.com/riclib/solid-sdk
 
 go 1.26.4
 
+// v0.6.0 shipped the quack package with its extension binaries gitignored, so
+// the module zip lacked the //go:embed payload and any consumer importing
+// quack failed to build ("pattern ...: no matching files found"). The
+// binaries are committed as of v0.6.1.
+retract v0.6.0
+
 // The kernel has ZERO v4 dependency — it is pure wire-contract types + thin
 // NATS/KV helpers over nats.go. The platform (v4) and the partner fork both
 // depend on THIS module (the inversion), not the other way around. Versions
@@ -12,6 +18,7 @@ require (
 )
 
 require (
+	github.com/duckdb/duckdb-go/v2 v2.10503.1
 	github.com/dusted-go/logging v1.3.0
 	github.com/phsym/console-slog v0.3.1
 )
@@ -25,7 +32,6 @@ require (
 	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10503.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10503.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10503.0 // indirect
-	github.com/duckdb/duckdb-go/v2 v2.10503.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
