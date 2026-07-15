@@ -219,7 +219,7 @@ type QuackConnectResult struct {
 
 // StatementMarker is the statement-log attribution prefix for statements a
 // solution runs over its quack connection (docs: the platform's
-// docs/sdk/solution-stores.md, "Your statements are logged"). The serving
+// docs/solution-stores.md in this repo, "Your statements are logged"). The serving
 // engine logs statements at engine grain (= workspace grain) and cannot tell
 // which caller a wire connection belongs to; prefixing every DML statement
 // with this marker — the comment survives verbatim into the log line — gives

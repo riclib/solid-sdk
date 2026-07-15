@@ -9,6 +9,14 @@ The Solid SDK and its companion starter, **solid-kit**, are how your team builds
 of the Solid platform. This is the builder's guide. (Platform internals and the
 wire protocol live in [`ARCHITECTURE.md`](./ARCHITECTURE.md).)
 
+**Where to read:**
+
+| You are | Start with |
+|---|---|
+| A solution builder | this README, then [the contracts](#the-contracts) in [`docs/`](./docs/) |
+| A coding agent (Claude) | [`CLAUDE.md`](./CLAUDE.md) — the invariants and working guide |
+| On the platform / wire level | [`ARCHITECTURE.md`](./ARCHITECTURE.md) — packages, wires, quack |
+
 ## A day building a solution
 
 1. **Install the Solid skill.** In Claude Desktop, install **Solid** from the
@@ -189,6 +197,20 @@ lands, a skill migrates your solution onto it, so what you built bespoke becomes
 something you get for free. It's how the data catalog gained its *business-name*
 field, and how incremental data loading is becoming a platform feature — both driven
 by real engagements.
+
+## The contracts
+
+The declarative surfaces a solution writes against are specified in
+[`docs/`](./docs/) — versioned, status-tagged, and the same documents the
+toolkit validates against:
+
+| Contract | Governs | Status |
+|---|---|---|
+| [`solution-stores.md`](./docs/solution-stores.md) | how your solution's data is declared, stored, served, and governed | DRAFT v0.2 |
+| [`store-backed-catalogs.md`](./docs/store-backed-catalogs.md) | declared-only exposure — the platform serves exactly the surface you declare | SHIPPED 1.0.0 |
+| [`workflow-defs.md`](./docs/workflow-defs.md) | the workflow YAML your solution ships (when to act) | SHIPPED 1.0.1 |
+| [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.14.1 |
+| [`incremental-load-pipeline.md`](./docs/incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
 
 ## Versions & support
 

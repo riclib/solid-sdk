@@ -12,10 +12,14 @@ Both sides depend on this module (the dependency inversion): the platform (v4)
 imports it to *watch* announced solutions and *route* tool calls; a partner
 solution imports it to *announce* its manifest and *serve* its tools.
 
-> **Status:** Phase 1 — the first wire. The `revassure_query` tool round-trips
-> end-to-end over loopback NATS (`transport` round-trip test). This is the
-> strangler proof: the same announce + serve + call the cross-process split will
-> use, today in one process.
+> **Status:** live, multi-wire (v0.6.x). The platform (v4) imports this module
+> in production; the wires below each ship with an embedded-NATS round-trip
+> test and a real consumer: **announce** (KV tree), **tool call**
+> (request-reply), **runnable** (platform→solution scheduled jobs over a
+> JetStream work-queue), **fire** (solution→platform workflow/skill trigger),
+> **heartbeat**, **asset**, **store proxy** (solution→platform request-reply,
+> S-1712), and **quack connect** (S-1728) with the `quack` engine-client
+> package as the paved road.
 
 ## Why this exists
 
@@ -37,12 +41,27 @@ contract/   pure wire types — no behavior, no deps beyond stdlib
   manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, PromptArtifact, WorkflowArtifact, DashboardArtifact, Solution (assembled)
   envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
+  runnable.go   the runnable wire — platform triggers a solution's long-running job (JetStream work-queue, progress streamed)
+  fire.go       the fire wire — the inverse: solution asks the platform to run a workflow/skill in a workspace
+  storeproxy.go StoreCall types — solution→platform request-reply (incl. the connect op)
 
 transport/  thin nats.go helpers over the contract types
-  announce.go   EnsureSolutionsBucket, PublishSolution, WatchSolutions   (KV tree)
-  serve.go      ServeTool   (partner side: request-reply responder)
-  call.go       CallTool    (platform side: request-reply caller)
-  roundtrip_test.go   embedded-NATS proof: full wire + KV-tree size guards
+  announce.go        EnsureSolutionsBucket, PublishSolution, WatchSolutions   (KV tree)
+  serve.go / call.go ServeTool (partner responder) / CallTool (platform caller)
+  runnable*.go       runnable trigger + serve (work-queue both sides)
+  fire.go            fire-run caller
+  heartbeat.go       solution liveness
+  asset.go           asset leaves
+  storecall.go       StoreCall client (store proxy)
+  quackconnect.go    QuackConnect — the raw connect-op handshake
+  roundtrip_test.go  embedded-NATS proof: full wire + KV-tree size guards
+
+quack/      the engine client — the paved road to your workspace store
+  conn.go            Conn: handshake + reconnect contract + statement markers (see below)
+  extensions.go      air-gapped DuckDB extensions, SHA-pinned + committed, //go:embed
+
+log/        the shared logging package every solution uses (see CLAUDE.md)
+encrypt/    secret-at-rest helper for solutions holding their own credentials
 ```
 
 ## Announce is a KV TREE, not one blob (the 1 MB rule)
@@ -136,8 +155,9 @@ go test ./...   # embedded-NATS round-trip, no external server needed
 ## Your quack connection (the connect op + the reconnect contract)
 
 A solution bound to a workspace gets a quack connection to that workspace's
-engine — full SQL, server-side execution, statement-logged (the platform's
-`docs/sdk/solution-stores.md` is the normative doc). You never configure an
+engine — full SQL, server-side execution, statement-logged
+([`docs/solution-stores.md`](./docs/solution-stores.md) is the normative doc).
+You never configure an
 engine address or token; you ask the platform over the store-proxy wire
 (S-1721 platform side, S-1728 this mirror):
 
@@ -203,39 +223,29 @@ Attribution is engine-grain; prefix every statement with
 comment survives verbatim into the statement log and gives the operator
 statement-level attribution.
 
+## Shipped wires (each landed with a consumer)
+
+- **Skill loop** — `SkillArtifact` leaves (including `Queries` — named queries
+  run at skill activation, `Active`, and the reserved `Parameters`, all
+  additive since v0.4.0/S-1587) are consumed by the platform's
+  `app/solutionbus`, which materialises announced skills into the workspace
+  gitstore so the agent loop sees them.
+- **Declarative artifact leaves** — prompt / workflow / dashboard `Body`
+  leaves (`PromptArtifact` / `WorkflowArtifact` / `DashboardArtifact`) are
+  parsed by the same consumer with announce-time validation: a bad partner
+  artifact greys out the solution, never panics the platform.
+- **Runnable + fire** — scheduled work in both directions: the platform
+  triggers a solution's long-running job over a JetStream work-queue
+  (`contract/runnable.go`); a solution asks the platform to run a
+  workflow/skill in a workspace (`contract/fire.go`). Plus **heartbeat**
+  (liveness) and **asset** leaves.
+- **Store proxy + quack connect** — the data plane: `StoreCall`
+  (solution→platform request-reply, S-1712) and the connect op (S-1728) served
+  by the `quack` package above.
+
 ## Next wires (each lands with a consumer)
 
-1. **Skill loop (control plane first)** — the skill leaf already round-trips
-   (`SkillArtifact`, `TestSkillWire_RoundTrip`). NEXT: v4 imports the SDK,
-   consumes assembled `Solution.Skills`, and registers them so the agent loop
-   sees them (the richer version materialises into the workspace gitstore — the
-   seed step). A skill is pure content (no data plane), so this is the clean
-   first real cross-repo integration. The **tool** execution path waits on the
-   data plane (a solution reads via quack, publishes changes over NATS) — the
-   tool *mechanism* is already proven with a stub; `revassure_query` is a data
-   tool, blocked on quack.
-
-   **v0.4.0 (S-1587, contract landed; v4 harness consumer pending):**
-   `SkillArtifact` gained `Queries []SkillQuery` (named queries the v4 harness
-   runs once at skill activation against the workspace data session, results
-   injected into the skill's context block — design:
-   `v4` repo `docs/design/skill-named-queries.md`), `Active *bool` (nil =
-   active; an explicit `false` lets a skill ship disabled/opt-in — the S-1564
-   deep-audit finding), and `Parameters []SkillParameter` (RESERVED for the
-   S-1590 general skill-parameter enhancement — defined on the wire now, no v1
-   consumer reads it, so the wire needs only one version bump for both). All
-   three are additive/`omitempty`; a v0.3.0 producer's announce still parses
-   unchanged. Round-trip: `TestSkillWire_QueriesActiveParameters_RoundTrip`,
-   `TestSkillWire_ActiveNil_MeansActive`. **The v0.4.0 tag is not yet cut** —
-   consumers pin the commit until Ricardo cuts it.
-2. **Declarative artifact leaves** — the prompt, workflow and dashboard leaves
-   now round-trip (`PromptArtifact` / `WorkflowArtifact` / `DashboardArtifact`,
-   `TestDeclarativeArtifacts_RoundTrip`): each is pure control-plane content
-   (`Body` carries the prompt text / workflow definition YAML / dashboard DSL
-   YAML), assembled back onto `Solution.Prompts/Workflows/Dashboards`. NEXT:
-   a v4 consumer parses each Body with announce-time validation (a bad partner
-   artifact greys out the solution, never panics the platform).
-3. **The answer/notary spine** — committed answer → JetStream (durable,
+1. **The answer/notary spine** — committed answer → JetStream (durable,
    sequenced), the seam Bulletproof's hash-chain reads from.
-4. **Bundled-infra extraction** — move v4's dashboard-DSL / markdown / charts /
+2. **Bundled-infra extraction** — move v4's dashboard-DSL / markdown / charts /
    quack-shaping here as shared packages (the second half).

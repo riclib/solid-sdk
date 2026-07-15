@@ -3,6 +3,12 @@
 The kernel of the Solid partner model: wire-contract types + thin NATS/KV
 helpers. Read `README.md` for the why; this is the working guide.
 
+`docs/` holds the external contracts (solution-stores, store-backed-catalogs,
+workflow-defs, dashboard-dsl, incremental-load-pipeline) — **source of truth
+here** since S-1743; the platform repo's `docs/sdk/` keeps pointer stubs. Bare
+`domains/…` / `infra/…` / `docs/design/…` paths inside those documents refer
+to the platform repo. See `docs/README.md` for the index and editing rule.
+
 ## Invariants — do not break these
 
 - **Zero v4 dependency.** This module must never `import "v4/..."`. Both v4 and
@@ -72,7 +78,7 @@ eventual shared build.
 without quack, so the engine client is a normal package (`solid-sdk/quack`),
 not a separate Go module: most partners start from solid-kit, which carries
 the build tooling, and submodule complexity buys nothing. (This supersedes the
-earlier "separate modules for CGO cost" doctrine;
+earlier "separate modules for CGO cost" doctrine; the v4 repo's
 `docs/ideas/sdk-ships-the-engines.md` remains the wider store/duck-primitives
 future.)
 
