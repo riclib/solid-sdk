@@ -43,19 +43,23 @@ type StoreCallRequest struct {
 	// and never releases it.
 	Store string `json:"store"`
 
-	// Op is the operation: StoreOpExec | StoreOpQuery | StoreOpTestConnection. It
-	// MUST match the subject's op segment (StoreCallSubject).
+	// Op is the operation: StoreOpExec | StoreOpQuery | StoreOpExecQuery |
+	// StoreOpTestConnection. It MUST match the subject's op segment
+	// (StoreCallSubject).
 	Op string `json:"op"`
 
-	// Statement is the SQL for exec/query (e.g. CALL <proc>(…) for exec). Empty
-	// for test_connection.
+	// Statement is the SQL for exec/query/exec_query (e.g. CALL <proc>(…) for
+	// exec). Empty for test_connection.
 	Statement string `json:"statement,omitempty"`
 
-	// Args are positional bind args for the statement (exec).
+	// Args are positional bind args for the statement (exec, exec_query). The
+	// query op does NOT bind args — it is read-shaped and the store's Query
+	// takes opts, not args; a query that needs binds wants exec_query (S-1761).
 	Args []any `json:"args,omitempty"`
 
 	// Opts are store-specific query options (e.g. limit); the responder clamps
-	// opts["limit"] to a server-side max and sets HasMore (query).
+	// opts["limit"] to a server-side max and sets HasMore (query). Ignored by
+	// exec_query, which runs the statement verbatim.
 	Opts map[string]any `json:"opts,omitempty"`
 }
 
@@ -88,15 +92,42 @@ type StoreCallResult struct {
 
 // Store operations — the op segment of StoreCallSubject and StoreCallRequest.Op.
 const (
-	// StoreOpExec runs a statement with no result set (DDL, CALL <proc>(…),
-	// INSERT/UPDATE). The v1 op, the S-1711 consumer. No result set means the
-	// ~1 MB NATS reply ceiling is a non-issue.
+	// StoreOpExec runs a statement with positional bind args and NO result set
+	// (DDL, CALL <proc>(…), INSERT/UPDATE). The v1 op. No result set means the
+	// ~1 MB NATS reply ceiling is a non-issue. A CALL whose OUT values must come
+	// back wants StoreOpExecQuery, not this.
 	StoreOpExec = "exec"
 
 	// StoreOpQuery runs a read-shaped statement and returns Columns + Rows; the
 	// responder clamps opts["limit"] and sets HasMore. The caller pages exactly
 	// like the in-process API.
+	//
+	// query BINDS NO ARGS and does not run the statement verbatim: it is the
+	// read path, so the store is free to wrap the statement for pagination/sort
+	// (the Databricks store rewrites it to `WITH _q AS (<stmt>) … LIMIT n`).
+	// Request.Args are IGNORED here. A statement that carries binds, or that
+	// must not be rewritten (a BEGIN…END scripting block cannot be CTE-wrapped),
+	// wants StoreOpExecQuery.
 	StoreOpQuery = "query"
+
+	// StoreOpExecQuery runs a statement VERBATIM with positional bind args and
+	// returns its result set (S-1761). It is exec's execution shape — no
+	// pagination wrapping, no LIMIT rewrite, Opts ignored — with query's reply
+	// shape (Columns + Rows).
+	//
+	// The motivating case is a stored-procedure CALL whose OUT values are read
+	// back: Databricks binds OUT args to variables only, so the statement is a
+	// SQL-scripting block that DECLAREs, CALLs with the IN params, and SELECTs
+	// the OUT variables as a one-row result set — needing binds AND rows at
+	// once, which neither exec (no rows) nor query (no binds) provides.
+	//
+	// Because there is no LIMIT wrapper, the RESPONDER caps rows server-side and
+	// sets HasMore rather than risking the ~1 MB NATS reply ceiling: exec_query
+	// is for the handful of rows a statement reports about itself, not for bulk
+	// reads. Use query to page real result sets.
+	//
+	// A store that does not implement the capability replies StoreCodeUnsupportedOp.
+	StoreOpExecQuery = "exec_query"
 
 	// StoreOpTestConnection delegates to Store.TestConnection — nearly free,
 	// carries no statement.
