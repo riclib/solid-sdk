@@ -57,10 +57,36 @@ type StoreCallRequest struct {
 	// takes opts, not args; a query that needs binds wants exec_query (S-1761).
 	Args []any `json:"args,omitempty"`
 
+	// NamedArgs are named bind args (`:name` markers) for exec_query (S-1764).
+	// They exist because positional markers are not universally available:
+	// Databricks rejects `?` inside a SQL-scripting block outright —
+	// UNSUPPORTED_FEATURE.SQL_SCRIPTING_WITH_POSITIONAL_PARAMETERS — and a
+	// scripting block is the only way to read a stored procedure's OUT
+	// parameters there. Named markers are accepted in exactly that position, so
+	// for that shape of call they are not a preference but the only binding
+	// there is.
+	//
+	// They compose with Args (both are passed to the store, positional first),
+	// though a statement in practice uses one style or the other.
+	//
+	// A caller that means NULL sends a null Value — do NOT omit the entry, or
+	// the marker goes unbound and the statement fails.
+	NamedArgs []NamedArg `json:"named_args,omitempty"`
+
 	// Opts are store-specific query options (e.g. limit); the responder clamps
 	// opts["limit"] to a server-side max and sets HasMore (query). Ignored by
 	// exec_query, which runs the statement verbatim.
 	Opts map[string]any `json:"opts,omitempty"`
+}
+
+// NamedArg is one `:name` bind. Value is whatever JSON carries — the responder
+// hands it to the driver as-is, so a statement that needs a specific SQL type
+// should CAST the marker rather than rely on the wire to preserve one: JSON has
+// a single number type, so an integer arrives as a float and only the statement
+// can say it meant INT.
+type NamedArg struct {
+	Name  string `json:"name"`
+	Value any    `json:"value"`
 }
 
 // StoreCallResult is the reply. Liveness semantics are contract.CallTool's:
@@ -125,6 +151,12 @@ const (
 	// sets HasMore rather than risking the ~1 MB NATS reply ceiling: exec_query
 	// is for the handful of rows a statement reports about itself, not for bulk
 	// reads. Use query to page real result sets.
+	//
+	// Binds may be positional (Args) or named (NamedArgs, S-1764). Named ones
+	// are not a stylistic choice: Databricks rejects `?` inside a SQL-scripting
+	// block, and a scripting block is the only way to read a procedure's OUT
+	// parameters there — so a CALL that reports through OUT params can only be
+	// bound by name.
 	//
 	// A store that does not implement the capability replies StoreCodeUnsupportedOp.
 	StoreOpExecQuery = "exec_query"
