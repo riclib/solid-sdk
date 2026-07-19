@@ -2,12 +2,12 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.14.1                                             │
+  │  Contract version : 0.16.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
   │                      the LLM; third parties write against this.        │
-  │  Last updated      : 2026-07-15                                        │
+  │  Last updated      : 2026-07-19                                        │
   │  Owner ticket      : S-1140 (design) / S-1524 (this correctness pass)  │
   │  Implements        : shipped — frame, macros, dialect (see §1.1)       │
   │  Supersedes        : the hand-rolled window SQL in                     │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.14.1 · Draft · `dsl_version: "0.14"`**
+**Contract version 0.16.0 · Draft · `dsl_version: "0.16"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -153,6 +153,7 @@ Runtime compatibility rule **(planned)**:
 | 0.14.0 | 2026-07-05 | Additive: new `info-card` widget `kind` — one query → an adaptive grid of status-colored cards, each pairing a status pill with a heading and an optional prose body (the prose sibling of `multistat`: status + heading + body where multistat is label + number). New optional fields `status` / `heading` / `body` (columns declared by name) + `per_row` (grid column ceiling, default 4, 1..12); reuses `sort` / `limit` (overflow → "+M more"). `status` carries the semantic `StatusLevel` vocabulary (normal / warning / error / info); an unrecognised value degrades to the neutral/unknown pill, never an error. A single-row query renders one standalone card via the same path (S-1620). |
 | 0.14.1 | 2026-07-15 | PATCH (doc-only, no schema change): §7.4 large-table hazard warning (S-1730). `on_load` renders `{{ timeFilter }}` as `TRUE`, so a query-derived option list scans the WHOLE table on every full-page header render, independent of the picker period — an unbounded scan on a fat fact table (on the demo estate an `on_load` `DISTINCT` over a 72M-row `metrics` table, stacked with an uncapped engine, seized the box). Guidance: on large tables declare `options_refresh: on_window` or point the option query at a materialised dimension/labels table; reserve `on_load` for small, slowly-changing reference sets. No schema change — `on_load` remains the default and its unbounded semantics are unchanged. (large-table-hazard) |
 | 0.15.0 | 2026-07-19 | Additive (heatmap time axes, v4 #882/#883/#884): new units `hour` and `auto` (`auto` derives bucket width from the resolved window targeting ~40 columns — 24h→1h, 7d→4h, year→weeks; frameless falls back to `day`). A time COLUMN axis is now **frame-driven**: buckets pre-seeded across the resolved window, dataless buckets render as empty cells instead of missing columns (time ROW axes unchanged). Duplicate cells now keep the **worst** status (severity: fail > warn > unknown > info > ok), replacing previously-unspecified last-write-wins — queries may emit one graded row per source point and let the widget fold. Dense axes (>16 cols) thin labels to every ~12th; cell tooltips keep the exact bucket. (heatmap-window-buckets) |
+| 0.16.0 | 2026-07-19 | Additive (nav groups, S-1771): new optional dashboard-level fields `group` (string) + `nav_order` (int). Dashboards sharing a `group` collapse into ONE workspace-nav item rendered as a dropdown of members; `nav_order` positions a dashboard in the nav and within its group (lower = first; unset keeps announce-order). Presentation only: `?page=<id>` deep links, drill-downs, and widget identity are untouched — the dropdown is chrome, not routing. Group display text is owned by the document; the platform never infers hierarchy from page-id segments. (nav-groups) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -163,6 +164,9 @@ Runtime compatibility rule **(planned)**:
 dsl_version: "0.1"
 id: dq.home                     # stable registration ID (required)
 title: "ISOP Carta — Data Quality"
+
+group: "KPI Detail"             # optional — nav dropdown this dashboard files under (0.16.0)
+nav_order: 2                    # optional — position in the nav / within the group (lower = first)
 
 header:                         # optional PageHeader chrome (see editor doc §4.7)
   title: "Data Quality"
