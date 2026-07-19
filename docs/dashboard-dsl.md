@@ -152,6 +152,7 @@ Runtime compatibility rule **(planned)**:
 | 0.13.0 | 2026-07-04 | Additive: a variable's option `query:` MAY return an optional **count column** — named `count`/`n`/`cnt`, or simply the second column — read as the occurrence count per value and surfaced in the filter-picker UI. Counts are presentational only; selection semantics and the variable macros never read them, and a missing/non-numeric count column degrades to values-only. No YAML field changes (§7.4). UI (§7.6): the `+ Filter` cascading value submenu is replaced by the filter-picker panel — per-filter searchable value tables with counts, multi-select checkboxes; filter option queries resolve lazily on panel open instead of per header render (S-1606). (option-counts) |
 | 0.14.0 | 2026-07-05 | Additive: new `info-card` widget `kind` — one query → an adaptive grid of status-colored cards, each pairing a status pill with a heading and an optional prose body (the prose sibling of `multistat`: status + heading + body where multistat is label + number). New optional fields `status` / `heading` / `body` (columns declared by name) + `per_row` (grid column ceiling, default 4, 1..12); reuses `sort` / `limit` (overflow → "+M more"). `status` carries the semantic `StatusLevel` vocabulary (normal / warning / error / info); an unrecognised value degrades to the neutral/unknown pill, never an error. A single-row query renders one standalone card via the same path (S-1620). |
 | 0.14.1 | 2026-07-15 | PATCH (doc-only, no schema change): §7.4 large-table hazard warning (S-1730). `on_load` renders `{{ timeFilter }}` as `TRUE`, so a query-derived option list scans the WHOLE table on every full-page header render, independent of the picker period — an unbounded scan on a fat fact table (on the demo estate an `on_load` `DISTINCT` over a 72M-row `metrics` table, stacked with an uncapped engine, seized the box). Guidance: on large tables declare `options_refresh: on_window` or point the option query at a materialised dimension/labels table; reserve `on_load` for small, slowly-changing reference sets. No schema change — `on_load` remains the default and its unbounded semantics are unchanged. (large-table-hazard) |
+| 0.15.0 | 2026-07-19 | Additive (heatmap time axes, v4 #882/#883/#884): new units `hour` and `auto` (`auto` derives bucket width from the resolved window targeting ~40 columns — 24h→1h, 7d→4h, year→weeks; frameless falls back to `day`). A time COLUMN axis is now **frame-driven**: buckets pre-seeded across the resolved window, dataless buckets render as empty cells instead of missing columns (time ROW axes unchanged). Duplicate cells now keep the **worst** status (severity: fail > warn > unknown > info > ok), replacing previously-unspecified last-write-wins — queries may emit one graded row per source point and let the widget fold. Dense axes (>16 cols) thin labels to every ~12th; cell tooltips keep the exact bucket. (heatmap-window-buckets) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -830,18 +831,38 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
 - **`type: category` (default)** — the value renders **verbatim** as both the cell
   key and the axis label; axis order follows the query's `ORDER BY` (no lexical
   re-sort).
-- **`type: time`** — the value is parsed and **bucketed** by `unit` (`day` |
-  `week` | `month` | `quarter` | `year`), labelled via `format` (a Go time layout,
-  e.g. `"01-02"` / `"Jan 2006"`; `quarter` / `week` use a built-in formatter), and
-  sorted chronologically:
+- **`type: time`** — the value is parsed and **bucketed** by `unit` (`hour` |
+  `day` | `week` | `month` | `quarter` | `year` | `auto`), labelled via `format`
+  (a Go time layout, e.g. `"01-02"` / `"Jan 2006"`; `quarter` / `week` use a
+  built-in formatter; sub-day buckets default to `"01-02 15:04"`), and sorted
+  chronologically:
 
   ```yaml
   col: { field: dt, type: time, unit: day, format: "01-02" }
   ```
 
-- The query MUST return **one row per `(col, row)` cell** (aggregate in SQL, e.g.
-  a worst-status `CASE MIN(...)`); duplicate cells are last-write-wins and
-  unspecified.
+- **A time COLUMN axis is frame-driven (0.15.0)**: its buckets are generated
+  from the resolved time window, pre-seeded across the whole span — the grid
+  always covers the period the user picked, and a bucket with no data renders
+  as an **empty cell** rather than a silently missing column. (A time ROW
+  axis, and any axis without a resolvable frame, stays data-derived as
+  before.)
+- **`unit: auto` (0.15.0)** derives the bucket width from the window span,
+  aiming at ~40 columns whatever range is picked: 24 h → 1 h buckets, 7 d →
+  4 h, 30 d → a day, a year → weeks. The ladder is 1m/5m/15m/30m/1h/2h/4h/
+  6h/12h then day/week/month — the narrowest width keeping the window at or
+  under ~44 columns. Without a frame, `auto` falls back to `day`.
+- **Duplicate cells keep the WORST status (0.15.0)** — severity order
+  `fail/error/critical/high` > `warn/warning/elevated` > *unknown* >
+  `inconclusive/info` > `pass/ok/healthy`. This replaces the previously
+  *unspecified* last-write-wins: a query MAY now simply emit one graded row
+  per source point (e.g. per hourly KPI round) and let the widget fold them —
+  the wall exists to surface the bad hour, and a later ok must not paint over
+  it. Pre-aggregating in SQL remains valid.
+- Rendering notes: past ~16 columns the axis labels the first bucket of every
+  ~12th column (cell tooltips keep the exact bucket); the heatmap is a
+  server-rendered grid and refreshes wholesale on window change (it is exempt
+  from the chart-canvas morph preservation that protects uPlot widgets).
 
 > **Breaking change (0.12.0).** This replaces the prior positional contract
 > (`cols[0]` parsed as a date and formatted `MM-DD`, `cols[1]` = row label,
