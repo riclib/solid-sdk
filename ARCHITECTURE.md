@@ -43,6 +43,7 @@ contract/   pure wire types — no behavior, no deps beyond stdlib
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
   runnable.go   the runnable wire — platform triggers a solution's long-running job (JetStream work-queue, progress streamed)
   fire.go       the fire wire — the inverse: solution asks the platform to run a workflow/skill in a workspace
+  lake.go       LakeArtifact — the lake a solution declares (streams, projections, views, ingests, retention); materialized by the platform on approval
   storeproxy.go StoreCall types — solution→platform request-reply (incl. the connect op)
 
 transport/  thin nats.go helpers over the contract types
@@ -242,6 +243,10 @@ statement-level attribution.
 - **Store proxy + quack connect** — the data plane: `StoreCall`
   (solution→platform request-reply, S-1712) and the connect op (S-1728) served
   by the `quack` package above.
+- **Lake** — `LakeArtifact` leaves (S-1874) declare a full data
+  plane: an append-only lake tenant + wsstore projections + bind-time views +
+  the generic FILE-door ingest. Consumed by the platform's announced-tenant
+  boot module; approval gates materialization. See `docs/lake-artifact.md`.
 
 ## Next wires (each lands with a consumer)
 
