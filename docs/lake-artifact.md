@@ -164,7 +164,9 @@ must **schema-qualify** the projection tables it reads (`FROM
 
 ## Ingest — the FILE door
 
-There is **no special ingest API**. Your writer emits envelope files (NDJSON)
+There is **no special ingest API** — and in v1 the FILE door is a lake's
+ONLY write door, so **at least one `Ingests` entry is required** (the
+platform's lake refuses a tenant with no sources). Your writer emits envelope files (NDJSON)
 into a source the platform walks — the same production pipeline the in-tree
 systems use, pointed at your files. Each `Ingests` entry materializes a
 generic FILE-door runnable plus a job seeded **DISABLED** (operator enables)

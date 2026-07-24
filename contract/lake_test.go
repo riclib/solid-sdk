@@ -194,6 +194,9 @@ func TestLakeArtifact_ValidateRejects(t *testing.T) {
 		{"duplicate ingest source", func(a *contract.LakeArtifact) {
 			a.Ingests = append(a.Ingests, a.Ingests[0])
 		}, "duplicate ingest source"},
+		{"no ingests", func(a *contract.LakeArtifact) {
+			a.Ingests = nil
+		}, "at least one ingest"},
 		{"retention missing", func(a *contract.LakeArtifact) {
 			a.Retention = contract.RetentionDecl{}
 		}, "retention is required"},
@@ -272,10 +275,12 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 			"future_stream_field": true,
 			"columns": [
 				{"name": "event_time", "type": "TIMESTAMP", "role": "time", "future_col_field": 7},
-				{"name": "workspace", "type": "VARCHAR"}
+				{"name": "workspace", "type": "VARCHAR"},
+				{"name": "src_slice", "type": "VARCHAR"}
 			],
 			"labels": ["workspace"]
 		}],
+		"ingests": [{"stream": "events", "future_ingest_field": true}],
 		"retention": {"class": "window", "days": 90, "future_retention_field": "x"},
 		"binding": "solution"
 	}`
@@ -283,7 +288,7 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 	if err := json.Unmarshal([]byte(payload), &a); err != nil {
 		t.Fatalf("unknown fields must not break decode: %v", err)
 	}
-	if a.Name != "futuredemo" || len(a.Streams) != 1 || len(a.Streams[0].Columns) != 2 ||
+	if a.Name != "futuredemo" || len(a.Streams) != 1 || len(a.Streams[0].Columns) != 3 ||
 		a.Retention.Days != 90 {
 		t.Fatalf("known fields lost around unknown ones: %+v", a)
 	}

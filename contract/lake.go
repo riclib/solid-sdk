@@ -54,10 +54,11 @@ type LakeArtifact struct {
 	// platform's engine funnel at bind time.
 	Views []ViewDecl `json:"views,omitempty"`
 
-	// Ingests, when set, materialize the generic FILE-door ingest: one
-	// runnable + one seeded DISABLED job PER entry (the operator enables —
-	// the S-1852 convention). One entry per stream that lands from files; a
-	// tenant fed entirely over another wire declares none. (Plural since the
+	// Ingests materialize the generic FILE-door ingest: one runnable + one
+	// seeded DISABLED job PER entry (the operator enables — the S-1852
+	// convention), one entry per stream that lands from files. At least one
+	// is REQUIRED in v1: the FILE door is a lake's only write door, and the
+	// platform's lake refuses a tenant with no sources. (Plural since the
 	// first real consumer: a demo with three streams needs three doors.)
 	Ingests []IngestDecl `json:"ingests,omitempty"`
 
@@ -377,6 +378,12 @@ func (t LakeArtifact) Validate() error {
 		names[v.Name] = true
 	}
 
+	// v1: the FILE door is a lake's ONLY write door, and the platform's lake
+	// refuses a tenant with no sources — so at least one ingest is required.
+	// (A future wire-fed lake kind would RELAX this additively.)
+	if len(t.Ingests) == 0 {
+		return fmt.Errorf("lake %q: at least one ingest required (v1: the FILE door is the only write door)", t.Name)
+	}
 	ingestSources := map[string]bool{}
 	for _, ing := range t.Ingests {
 		if err := ing.validate(t.Name, streams); err != nil {
