@@ -26,7 +26,7 @@ const (
 	ArtifactProjection ArtifactKind = "projection" // ID = projection id; leaf payload = ProjectionArtifact
 	ArtifactRunnable   ArtifactKind = "runnable"   // ID = runnable type; leaf payload = RunnableDescriptor
 	ArtifactJob        ArtifactKind = "job"        // ID = job id; leaf payload = JobArtifact
-	ArtifactTenant     ArtifactKind = "tenant"     // ID = tenant name; leaf payload = TenantArtifact
+	ArtifactLake       ArtifactKind = "lake"       // ID = lake name; leaf payload = LakeArtifact
 )
 
 // ArtifactRef is one entry in the manifest's index — kind + id is the leaf
@@ -360,6 +360,6 @@ type Solution struct {
 	// Tenants are the announced lake-tenant declarations (S-1874). On operator
 	// approval the platform materializes each into a lake tenant + wsstore
 	// projections + bind-time views + (optionally) the generic FILE-door
-	// ingest. See TenantArtifact.
-	Tenants []TenantArtifact
+	// ingest. See LakeArtifact.
+	Lakes []LakeArtifact
 }

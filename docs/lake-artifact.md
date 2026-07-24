@@ -1,12 +1,13 @@
-# TenantArtifact — declaring a lake tenant from a solution
+# LakeArtifact — declaring a lake from a solution
 
 **Contract version:** 0.1.0
 **Status:** DRAFT (pre-1.0 minors can break)
 **Owner ticket:** S-1874 (design: platform repo `docs/design/demos-over-the-lake.md`)
-**Wire type:** `contract.TenantArtifact` (leaf kind `tenant`, key `<solution>.tenant.<name>`)
+**Wire type:** `contract.LakeArtifact` (leaf kind `lake`, key `<solution>.lake.<name>`)
 
-A `TenantArtifact` is the one announce-wire artifact that declares a **data
-plane**: an append-only, signed lake tenant plus the projections, views and
+A `LakeArtifact` is the one announce-wire artifact that declares a **data
+plane** — you declare a LAKE ('tenant' is the platform's plumbing word for a
+lake's slot in the estate): an append-only, signed lake tenant plus the projections, views and
 ingest that make it usable. On operator approval the platform materializes it
 into exactly what the in-tree boot modules build imperatively — no in-tree
 privilege required. Your demo/solution's data then lives on an immutable,
@@ -39,8 +40,8 @@ check is a courtesy, not the gate.
 ## The declaration
 
 ```go
-contract.TenantArtifact{
-    Name: "salesdemo",                    // lowercase ident; reserved names refused
+contract.LakeArtifact{
+    Name: "salesdemo",                    // lowercase ident; reserved names + _admin suffix refused
     Streams: []contract.StreamDecl{{
         Name: "sales_events",
         Columns: []contract.ColumnDecl{   // ordered — this IS the landing order
@@ -59,7 +60,14 @@ contract.TenantArtifact{
         {Name: "events_copy", Stream: "sales_events", Kind: contract.ProjectionCopy},
         {Name: "deal_totals", Stream: "sales_events", Kind: contract.ProjectionDerive,
          DeriveFrom: "events_copy", KeyColumns: []string{"deal_id"},
-         DeriveSQL: "SELECT deal_id, SUM(amount) AS total FROM {from} GROUP BY deal_id"},
+         // The dedup belt: {from} exposes the arrival-gen column as "__gen"
+         // (quoted — the platform's physical bookkeeping column). Without it
+         // a corrected event (same event_id, later gen) DOUBLE-COUNTS.
+         DeriveSQL: `WITH dedup AS (
+             SELECT * FROM {from}
+             QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY "__gen" DESC) = 1
+         )
+         SELECT deal_id, SUM(amount) AS total FROM dedup GROUP BY deal_id`},
     },
     Views: []contract.ViewDecl{
         {Name: "open_deals", SQL: "SELECT * FROM salesdemo.deals_latest WHERE status = 'open'"},
@@ -70,7 +78,7 @@ contract.TenantArtifact{
         Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson",
     }},
     Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
-    Binding:   contract.TenantBindingSolution,
+    Binding:   contract.LakeBindingSolution,
 }
 ```
 
@@ -111,7 +119,15 @@ re-validates and your statements run under the statement log and engine
 caps): single statement only; `TransformSQL` is a bare `SELECT` — no `WITH`,
 no `SELECT DISTINCT/ALL`; `DeriveSQL` may be `SELECT` or `WITH…SELECT`.
 Both read their source through the **`{from}` token** — the platform
-substitutes the schema-qualified table; never write the table name yourself.
+substitutes the schema-qualified table; never write the table name yourself
+(`Validate` refuses SQL without the token).
+
+**The arrival-gen column is `"__gen"`.** The lake's landing column is the
+reserved `gen`, but the SERVED projection tables `{from}` reads expose the
+arrival gen as the platform's bookkeeping column `__gen` (quote it — the
+name starts with an underscore). Every derive over a stream that can receive
+corrections needs the dedup belt shown in the example above: keep the
+latest-gen version of each event identity, or corrections double-count.
 
 **Ordering grain.** `latest` picks the observation with the highest **gen**,
 and the FILE-door lands one gen per file — so the landed file is the ordering
@@ -156,7 +172,10 @@ generic FILE-door runnable plus a job seeded **DISABLED** (operator enables)
 source with per-stream `SourcePattern`s:
 
 - walk the declared source (`SourceKind` + `SourcePattern`),
-- skip slices younger than the seal margin (`SealMarginMinutes`, default 15),
+- skip slices younger than the seal margin (`SealMarginMinutes`: 0 = the
+  platform default of 15; >= 1 = that literal margin; **-1 disables the gate**
+  — files land immediately, for dev/test_local sources whose files never
+  grow; a literal 0-minute margin is not expressible, use 1),
 - dedup already-landed files by byte hash,
 - land **one gen per file**, stamping `SliceColumn` (default `src_slice`,
   which the stream must declare) as the drain-surviving cursor.
@@ -191,8 +210,10 @@ too (discovery never exceeds the served surface).
 
 ## Reserved names
 
-`Validate` refuses tenant names that collide with the estate's in-tree
-tenants — `conversations`, `metrics`, `audit`, `solidmon`, `adf_ops`,
-`cdhkpi` — plus DuckDB's own schemas (`main`, `temp`, `system`,
-`information_schema`, `pg_catalog`) and anything prefixed `solid`. The
-reserved list is additive-only.
+`Validate` refuses lake names that collide with the estate's in-tree tenants
+— `conversations`, `metrics`, `audit`, `solidmon`, `adf_ops`, `cdhkpi` —
+plus DuckDB's own schemas (`main`, `temp`, `system`, `information_schema`,
+`pg_catalog`), anything prefixed `solid`, and any `_admin` suffix (lake
+foo's unscoped surfaces serve as the `foo_admin` schema). The sets are
+EXPORTED (`contract.ReservedLakeNames`, `contract.ReservedColumns`) as the
+single source of truth the platform re-validates against; additive-only.

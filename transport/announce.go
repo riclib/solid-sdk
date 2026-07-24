@@ -51,7 +51,7 @@ type SolutionPublish struct {
 	Projections []contract.ProjectionArtifact
 	Runnables   []contract.RunnableDescriptor
 	Jobs        []contract.JobArtifact
-	Tenants     []contract.TenantArtifact
+	Lakes       []contract.LakeArtifact
 
 	// Partner is the optional commercial identity of the organization shipping
 	// the solution — copied verbatim into the announced manifest's Partner
@@ -189,18 +189,18 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 		}
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactJob, ID: j.ID})
 	}
-	for _, tn := range p.Tenants {
-		// Tenants are validated at publish (partner-side fail-fast): a bad
+	for _, lk := range p.Lakes {
+		// Lakes are validated at publish (partner-side fail-fast): a bad
 		// declaration fails HERE with a field-level error instead of greying
 		// out platform-side. The platform re-validates before materializing.
-		if err := tn.Validate(); err != nil {
-			return fmt.Errorf("publish %q: tenant: %w", p.Name, err)
+		if err := lk.Validate(); err != nil {
+			return fmt.Errorf("publish %q: lake: %w", p.Name, err)
 		}
-		key := contract.ArtifactKey(p.Name, contract.ArtifactTenant, tn.Name)
-		if err := putLeaf(ctx, kv, key, tn); err != nil {
-			return fmt.Errorf("publish %q: tenant %q: %w", p.Name, tn.Name, err)
+		key := contract.ArtifactKey(p.Name, contract.ArtifactLake, lk.Name)
+		if err := putLeaf(ctx, kv, key, lk); err != nil {
+			return fmt.Errorf("publish %q: lake %q: %w", p.Name, lk.Name, err)
 		}
-		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactTenant, ID: tn.Name})
+		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactLake, ID: lk.Name})
 	}
 
 	// Purge leaves the previous publish had that this one drops.
@@ -340,12 +340,12 @@ func assemble(ctx context.Context, kv jetstream.KeyValue, m contract.SolutionMan
 				return contract.Solution{}, fmt.Errorf("decode job %s: %w", key, err)
 			}
 			sol.Jobs = append(sol.Jobs, j)
-		case contract.ArtifactTenant:
-			var tn contract.TenantArtifact
-			if err := json.Unmarshal(entry.Value(), &tn); err != nil {
-				return contract.Solution{}, fmt.Errorf("decode tenant %s: %w", key, err)
+		case contract.ArtifactLake:
+			var lk contract.LakeArtifact
+			if err := json.Unmarshal(entry.Value(), &lk); err != nil {
+				return contract.Solution{}, fmt.Errorf("decode lake %s: %w", key, err)
 			}
-			sol.Tenants = append(sol.Tenants, tn)
+			sol.Lakes = append(sol.Lakes, lk)
 		default:
 			// Unknown future leaf kinds resolve here when their wires land.
 		}

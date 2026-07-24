@@ -626,12 +626,12 @@ func TestCallTool_NoResponder(t *testing.T) {
 	}
 }
 
-// TestTenantArtifact_RoundTrip proves the lake-tenant declaration (S-1874)
+// TestLakeArtifact_RoundTrip proves the lake-tenant declaration (S-1874)
 // announces as its own typed leaf and assembles back field-for-field — the
 // one artifact whose declaration is typed rather than an opaque Body, since
 // the platform enforces its fields at materialization. Also proves the
 // publish-side fail-fast: an invalid declaration refuses to publish at all.
-func TestTenantArtifact_RoundTrip(t *testing.T) {
+func TestLakeArtifact_RoundTrip(t *testing.T) {
 	nc := startEmbeddedNATS(t)
 	js, err := jetstream.New(nc)
 	if err != nil {
@@ -643,7 +643,7 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 		t.Fatalf("ensure bucket: %v", err)
 	}
 
-	tenant := contract.TenantArtifact{
+	tenant := contract.LakeArtifact{
 		Name:   "salesdemo",
 		Source: "salesdemo",
 		Streams: []contract.StreamDecl{{
@@ -663,14 +663,14 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 		},
 		Ingests:   []contract.IngestDecl{{Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson"}},
 		Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
-		Binding:   contract.TenantBindingSolution,
+		Binding:   contract.LakeBindingSolution,
 	}
 
 	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
 		Name:        "salesdemo",
 		DisplayName: "Sales Demo",
 		Version:     "0.1.0",
-		Tenants:     []contract.TenantArtifact{tenant},
+		Lakes:       []contract.LakeArtifact{tenant},
 	})
 	if err != nil {
 		t.Fatalf("publish: %v", err)
@@ -682,19 +682,19 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 	}
 	select {
 	case sol := <-seen:
-		if len(sol.Tenants) != 1 {
-			t.Fatalf("expected 1 tenant, got %d", len(sol.Tenants))
+		if len(sol.Lakes) != 1 {
+			t.Fatalf("expected 1 tenant, got %d", len(sol.Lakes))
 		}
-		got := sol.Tenants[0]
+		got := sol.Lakes[0]
 		if got.Name != "salesdemo" || len(got.Streams) != 1 || len(got.Streams[0].Columns) != 5 ||
 			got.Streams[0].Columns[0].Role != contract.RoleTime ||
 			len(got.Projections) != 1 || got.Projections[0].Kind != contract.ProjectionLatest ||
 			len(got.Ingests) != 1 || got.Ingests[0].SourceKind != "test_local" ||
 			got.Retention.Class != contract.RetentionWindow || got.Retention.Days != 90 ||
-			got.Binding != contract.TenantBindingSolution {
+			got.Binding != contract.LakeBindingSolution {
 			t.Fatalf("tenant did not round-trip: %+v", got)
 		}
-		if len(sol.Manifest.Artifacts) != 1 || sol.Manifest.Artifacts[0].Kind != contract.ArtifactTenant {
+		if len(sol.Manifest.Artifacts) != 1 || sol.Manifest.Artifacts[0].Kind != contract.ArtifactLake {
 			t.Fatalf("expected one tenant artifact ref, got %+v", sol.Manifest.Artifacts)
 		}
 	case <-time.After(3 * time.Second):
@@ -705,7 +705,7 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 	bad := tenant
 	bad.Name = "audit"
 	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
-		Name: "salesdemo", Tenants: []contract.TenantArtifact{bad},
+		Name: "salesdemo", Lakes: []contract.LakeArtifact{bad},
 	})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("expected reserved-name publish refusal, got: %v", err)

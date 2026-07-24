@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-// TenantArtifact is the leaf payload for an ArtifactTenant — a lake-tenant
-// declaration the solution ships (S-1874, "demos over the lake"). It is the
+// LakeArtifact is the leaf payload for an ArtifactLake — the lake a solution
+// declares (S-1874, "demos over the lake"). Named from the SDK user's point
+// of view: the partner declares A LAKE — an append-only, signed record plus
+// the projections that serve it; "tenant" below is the platform's plumbing
+// word for a lake's slot in the estate. It is the
 // one artifact that declares a DATA plane rather than control-plane content:
 // on operator approval the platform materializes it into a lake tenant (an
 // append-only, signed, immutable record), wsstore projections bound per
@@ -24,12 +27,13 @@ import (
 //
 // Nothing here is behavior: Validate is pure structural checking over the
 // declaration (stdlib only), consistent with contract/ being pure data.
-type TenantArtifact struct {
-	// Name is BOTH the artifact leaf id (`<solution>.tenant.<name>`) and the
-	// lake tenant identifier. Validated: lowercase identifier
-	// ([a-z][a-z0-9_]*), refused when reserved (the in-tree tenants —
-	// "conversations", "metrics", "audit", solidmon's "adf_ops"/"cdhkpi" —
-	// and anything prefixed "solid").
+type LakeArtifact struct {
+	// Name is BOTH the artifact leaf id (`<solution>.lake.<name>`) and the
+	// platform-side lake-tenant identifier (it also becomes the served DuckDB
+	// schema). Validated: lowercase identifier ([a-z][a-z0-9_]*), refused when
+	// reserved (the in-tree tenants — "conversations", "metrics", "audit",
+	// solidmon's "adf_ops"/"cdhkpi" — DuckDB's own schemas, anything prefixed
+	// "solid", and any `_admin` suffix, which is the admin-schema namespace).
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Source      string `json:"source,omitempty"` // the solution that ships it
@@ -63,7 +67,7 @@ type TenantArtifact struct {
 	Retention RetentionDecl `json:"retention"`
 
 	// Binding names the roster rule: which workspaces the platform binds the
-	// tenant's projections into. v1's only value is TenantBindingSolution
+	// tenant's projections into. v1's only value is LakeBindingSolution
 	// ("solution"): the roster is the workspaces bound to the announcing
 	// solution (the S-1864 rule).
 	Binding string `json:"binding"`
@@ -231,8 +235,12 @@ type IngestDecl struct {
 	Envelope    string `json:"envelope,omitempty"`
 	EnvelopeRef string `json:"envelope_ref,omitempty"`
 
-	// SealMarginMinutes is how long after a slice closes before its files
-	// are considered sealed and landable. Default 15 when 0.
+	// SealMarginMinutes is how long after a slice-hour closes before its
+	// files are considered sealed and landable. Three-valued by contract:
+	// 0 (unset) = the platform default (15); >= 1 = that literal margin;
+	// -1 = the seal gate DISABLED (files land immediately — dev/test_local
+	// sources whose files never grow). A literal 0-minute margin is not
+	// expressible; use 1.
 	SealMarginMinutes int `json:"seal_margin_minutes,omitempty"`
 
 	// Schedule is the seeded job's cron expression. Default hourly
@@ -268,14 +276,14 @@ type RetentionDecl struct {
 	Days  int            `json:"days,omitempty"` // required >= 1 for "window"; must be 0 for "forever"
 }
 
-// TenantBindingSolution is v1's only Binding value: the bind roster is the
+// LakeBindingSolution is v1's only Binding value: the bind roster is the
 // set of workspaces bound to the announcing solution (the S-1864 rule).
-const TenantBindingSolution = "solution"
+const LakeBindingSolution = "solution"
 
-// reservedTenantNames are the in-tree lake tenants an announced tenant may
+// ReservedLakeNames are the in-tree lake tenants an announced tenant may
 // never claim. Additive-only: growing this list is safe, shrinking it is a
 // breaking change.
-var reservedTenantNames = map[string]bool{
+var ReservedLakeNames = map[string]bool{
 	"conversations": true,
 	"metrics":       true,
 	"audit":         true,
@@ -291,9 +299,9 @@ var reservedTenantNames = map[string]bool{
 	"pg_catalog":         true,
 }
 
-// reservedColumns are the lake's own landing columns; declaring one is
+// ReservedColumns are the lake's own landing columns; declaring one is
 // refused.
-var reservedColumns = map[string]bool{
+var ReservedColumns = map[string]bool{
 	"gen":      true,
 	"payload":  true,
 	"residual": true,
@@ -308,38 +316,53 @@ const WorkspaceLabel = "workspace"
 // per-kind projection rules, SQL shape guardrails, explicit retention, and
 // the binding rule. It is the partner-side fail-fast (PublishSolution calls
 // it); the platform independently re-validates before materializing.
-func (t TenantArtifact) Validate() error {
-	if err := validTenantName(t.Name); err != nil {
+func (t LakeArtifact) Validate() error {
+	if err := validLakeName(t.Name); err != nil {
 		return err
 	}
 	if len(t.Streams) == 0 {
-		return fmt.Errorf("tenant %q: at least one stream required", t.Name)
+		return fmt.Errorf("lake %q: at least one stream required", t.Name)
 	}
 
 	streams := make(map[string]StreamDecl, len(t.Streams))
+	// Served-name collision namespace: streams, projections and views all
+	// materialize as tables/views in ONE schema (a copy projection with no
+	// explicit name serves under its stream's name), so the three share one
+	// namespace.
+	names := map[string]bool{}
 	for _, s := range t.Streams {
 		if err := s.validate(t.Name); err != nil {
 			return err
 		}
 		if _, dup := streams[s.Name]; dup {
-			return fmt.Errorf("tenant %q: duplicate stream %q", t.Name, s.Name)
+			return fmt.Errorf("lake %q: duplicate stream %q", t.Name, s.Name)
 		}
 		streams[s.Name] = s
+		names[s.Name] = true
 	}
 
 	copies := map[string]bool{}
-	names := map[string]bool{}
+	projections := map[string]bool{}
 	for _, p := range t.Projections {
 		if p.Kind == ProjectionCopy {
 			copies[p.Name] = true
 		}
+		projections[p.Name] = true
 	}
+	seenProjections := map[string]bool{}
 	for _, p := range t.Projections {
-		if err := p.validate(t.Name, streams, copies); err != nil {
+		if err := p.validate(t.Name, streams, copies, projections); err != nil {
 			return err
 		}
-		if names[p.Name] {
-			return fmt.Errorf("tenant %q: duplicate projection %q", t.Name, p.Name)
+		if seenProjections[p.Name] {
+			return fmt.Errorf("lake %q: duplicate projection %q", t.Name, p.Name)
+		}
+		seenProjections[p.Name] = true
+		// A projection MAY serve under its own stream's name (the
+		// copy-serves-as-the-stream convention); any other collision with a
+		// stream or earlier projection is refused.
+		if names[p.Name] && p.Name != p.Stream {
+			return fmt.Errorf("lake %q: projection %q collides with another stream, projection or view", t.Name, p.Name)
 		}
 		names[p.Name] = true
 	}
@@ -349,7 +372,7 @@ func (t TenantArtifact) Validate() error {
 			return err
 		}
 		if names[v.Name] {
-			return fmt.Errorf("tenant %q: view %q collides with another projection or view", t.Name, v.Name)
+			return fmt.Errorf("lake %q: view %q collides with another stream, projection or view", t.Name, v.Name)
 		}
 		names[v.Name] = true
 	}
@@ -361,7 +384,7 @@ func (t TenantArtifact) Validate() error {
 		}
 		src := ing.SourceName()
 		if ingestSources[src] {
-			return fmt.Errorf("tenant %q: duplicate ingest source %q", t.Name, src)
+			return fmt.Errorf("lake %q: duplicate ingest source %q", t.Name, src)
 		}
 		ingestSources[src] = true
 	}
@@ -369,78 +392,78 @@ func (t TenantArtifact) Validate() error {
 	switch t.Retention.Class {
 	case RetentionWindow:
 		if t.Retention.Days < 1 {
-			return fmt.Errorf("tenant %q: retention class %q requires days >= 1", t.Name, RetentionWindow)
+			return fmt.Errorf("lake %q: retention class %q requires days >= 1", t.Name, RetentionWindow)
 		}
 	case RetentionForever:
 		if t.Retention.Days != 0 {
-			return fmt.Errorf("tenant %q: retention class %q must not set days", t.Name, RetentionForever)
+			return fmt.Errorf("lake %q: retention class %q must not set days", t.Name, RetentionForever)
 		}
 	case "":
-		return fmt.Errorf("tenant %q: retention is required and always explicit (%q or %q)", t.Name, RetentionWindow, RetentionForever)
+		return fmt.Errorf("lake %q: retention is required and always explicit (%q or %q)", t.Name, RetentionWindow, RetentionForever)
 	default:
-		return fmt.Errorf("tenant %q: unknown retention class %q", t.Name, t.Retention.Class)
+		return fmt.Errorf("lake %q: unknown retention class %q", t.Name, t.Retention.Class)
 	}
 
-	if t.Binding != TenantBindingSolution {
-		return fmt.Errorf("tenant %q: binding must be %q (v1's only roster rule)", t.Name, TenantBindingSolution)
+	if t.Binding != LakeBindingSolution {
+		return fmt.Errorf("lake %q: binding must be %q (v1's only roster rule)", t.Name, LakeBindingSolution)
 	}
 	return nil
 }
 
 func (s StreamDecl) validate(tenant string) error {
 	if !isIdent(s.Name) {
-		return fmt.Errorf("tenant %q: stream name %q is not a valid identifier", tenant, s.Name)
+		return fmt.Errorf("lake %q: stream name %q is not a valid identifier", tenant, s.Name)
 	}
 	if len(s.Columns) == 0 {
-		return fmt.Errorf("tenant %q: stream %q declares no columns", tenant, s.Name)
+		return fmt.Errorf("lake %q: stream %q declares no columns", tenant, s.Name)
 	}
 	cols := map[string]bool{}
 	timeCols := 0
 	for _, c := range s.Columns {
 		if !isIdent(c.Name) {
-			return fmt.Errorf("tenant %q: stream %q: column name %q is not a valid identifier", tenant, s.Name, c.Name)
+			return fmt.Errorf("lake %q: stream %q: column name %q is not a valid identifier", tenant, s.Name, c.Name)
 		}
-		if reservedColumns[strings.ToLower(c.Name)] {
-			return fmt.Errorf("tenant %q: stream %q: column %q is reserved by the lake", tenant, s.Name, c.Name)
+		if ReservedColumns[strings.ToLower(c.Name)] {
+			return fmt.Errorf("lake %q: stream %q: column %q is reserved by the lake", tenant, s.Name, c.Name)
 		}
 		if cols[c.Name] {
-			return fmt.Errorf("tenant %q: stream %q: duplicate column %q", tenant, s.Name, c.Name)
+			return fmt.Errorf("lake %q: stream %q: duplicate column %q", tenant, s.Name, c.Name)
 		}
 		cols[c.Name] = true
 		if !isDuckType(c.Type) {
-			return fmt.Errorf("tenant %q: stream %q: column %q has invalid type %q", tenant, s.Name, c.Name, c.Type)
+			return fmt.Errorf("lake %q: stream %q: column %q has invalid type %q", tenant, s.Name, c.Name, c.Type)
 		}
 		switch c.Role {
 		case "":
 		case RoleTime:
 			timeCols++
 		default:
-			return fmt.Errorf("tenant %q: stream %q: column %q has unknown role %q", tenant, s.Name, c.Name, c.Role)
+			return fmt.Errorf("lake %q: stream %q: column %q has unknown role %q", tenant, s.Name, c.Name, c.Role)
 		}
 	}
 	if timeCols != 1 {
-		return fmt.Errorf("tenant %q: stream %q must declare exactly one role=%q column (got %d)", tenant, s.Name, RoleTime, timeCols)
+		return fmt.Errorf("lake %q: stream %q must declare exactly one role=%q column (got %d)", tenant, s.Name, RoleTime, timeCols)
 	}
 	for _, l := range s.Labels {
 		if !cols[l] {
-			return fmt.Errorf("tenant %q: stream %q: label %q is not a declared column", tenant, s.Name, l)
+			return fmt.Errorf("lake %q: stream %q: label %q is not a declared column", tenant, s.Name, l)
 		}
 	}
 	return nil
 }
 
-func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies map[string]bool) error {
+func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies, projections map[string]bool) error {
 	if !isIdent(p.Name) {
-		return fmt.Errorf("tenant %q: projection name %q is not a valid identifier", tenant, p.Name)
+		return fmt.Errorf("lake %q: projection name %q is not a valid identifier", tenant, p.Name)
 	}
 	stream, ok := streams[p.Stream]
 	if !ok {
-		return fmt.Errorf("tenant %q: projection %q references undeclared stream %q", tenant, p.Name, p.Stream)
+		return fmt.Errorf("lake %q: projection %q references undeclared stream %q", tenant, p.Name, p.Stream)
 	}
 
 	if !p.Unscoped {
 		if !hasLabel(stream, WorkspaceLabel) {
-			return fmt.Errorf("tenant %q: projection %q is workspace-scoped but stream %q does not declare the %q label",
+			return fmt.Errorf("lake %q: projection %q is workspace-scoped but stream %q does not declare the %q label",
 				tenant, p.Name, p.Stream, WorkspaceLabel)
 		}
 	}
@@ -450,58 +473,75 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 	// are checked as identifiers only.
 	checkCol := func(field, col string) error {
 		if !isIdent(col) {
-			return fmt.Errorf("tenant %q: projection %q: %s %q is not a valid identifier", tenant, p.Name, field, col)
+			return fmt.Errorf("lake %q: projection %q: %s %q is not a valid identifier", tenant, p.Name, field, col)
 		}
 		if p.TransformSQL == "" && p.Kind != ProjectionDerive && !streamHasColumn(stream, col) {
-			return fmt.Errorf("tenant %q: projection %q: %s %q is not a column of stream %q", tenant, p.Name, field, col, p.Stream)
+			return fmt.Errorf("lake %q: projection %q: %s %q is not a column of stream %q", tenant, p.Name, field, col, p.Stream)
 		}
 		return nil
 	}
 
+	// Derive-only fields are fenced per kind: Bump*/TouchPredicate/Tombstone*
+	// have no meaning on copy/latest, and a silently-ignored field is a wire
+	// trap (the author believes tombstones work).
+	deriveOnlySet := p.TouchPredicate != "" || p.BumpColumn != "" || p.BumpTimeColumn != "" ||
+		p.TombstoneCondition != "" || len(p.TombstoneProjections) > 0
+
 	switch p.Kind {
 	case ProjectionCopy:
-		if p.DeriveSQL != "" || p.DeriveFrom != "" || p.TouchPredicate != "" {
-			return fmt.Errorf("tenant %q: projection %q: derive fields on a copy projection", tenant, p.Name)
+		if p.DeriveSQL != "" || p.DeriveFrom != "" || deriveOnlySet {
+			return fmt.Errorf("lake %q: projection %q: derive-only fields on a copy projection", tenant, p.Name)
 		}
 		if p.TransformSQL != "" {
 			if err := validateBareSelect(p.TransformSQL, false); err != nil {
-				return fmt.Errorf("tenant %q: projection %q: transform_sql: %w", tenant, p.Name, err)
+				return fmt.Errorf("lake %q: projection %q: transform_sql: %w", tenant, p.Name, err)
+			}
+			if !strings.Contains(p.TransformSQL, "{from}") {
+				return fmt.Errorf("lake %q: projection %q: transform_sql must read the {from} token (the platform substitutes the schema-qualified stream source)", tenant, p.Name)
 			}
 		}
 	case ProjectionLatest:
-		if p.TransformSQL != "" || p.DeriveSQL != "" || p.DeriveFrom != "" {
-			return fmt.Errorf("tenant %q: projection %q: transform/derive fields on a latest projection", tenant, p.Name)
+		if p.TransformSQL != "" || p.DeriveSQL != "" || p.DeriveFrom != "" || deriveOnlySet {
+			return fmt.Errorf("lake %q: projection %q: transform/derive-only fields on a latest projection", tenant, p.Name)
 		}
 		if len(p.KeyColumns) == 0 {
-			return fmt.Errorf("tenant %q: projection %q: latest requires key_columns", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: latest requires key_columns", tenant, p.Name)
 		}
 		if p.TimeColumn == "" {
-			return fmt.Errorf("tenant %q: projection %q: latest requires time_column", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: latest requires time_column", tenant, p.Name)
 		}
 	case ProjectionDerive:
 		if p.TransformSQL != "" {
-			return fmt.Errorf("tenant %q: projection %q: transform_sql on a derive projection", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: transform_sql on a derive projection", tenant, p.Name)
 		}
 		if p.DeriveSQL == "" || p.DeriveFrom == "" {
-			return fmt.Errorf("tenant %q: projection %q: derive requires derive_sql and derive_from", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: derive requires derive_sql and derive_from", tenant, p.Name)
 		}
 		if !copies[p.DeriveFrom] {
-			return fmt.Errorf("tenant %q: projection %q: derive_from %q is not a copy projection in this artifact", tenant, p.Name, p.DeriveFrom)
+			return fmt.Errorf("lake %q: projection %q: derive_from %q is not a copy projection in this artifact", tenant, p.Name, p.DeriveFrom)
 		}
 		if len(p.KeyColumns) == 0 {
-			return fmt.Errorf("tenant %q: projection %q: derive requires key_columns", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: derive requires key_columns", tenant, p.Name)
 		}
 		if !strings.Contains(p.DeriveSQL, "{from}") {
-			return fmt.Errorf("tenant %q: projection %q: derive_sql must read the {from} token (the platform substitutes the schema-qualified derive_from table)", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: derive_sql must read the {from} token (the platform substitutes the schema-qualified derive_from table)", tenant, p.Name)
 		}
 		if (p.BumpColumn == "") != (p.BumpTimeColumn == "") {
-			return fmt.Errorf("tenant %q: projection %q: bump_column and bump_time_column must be set together", tenant, p.Name)
+			return fmt.Errorf("lake %q: projection %q: bump_column and bump_time_column must be set together", tenant, p.Name)
+		}
+		if len(p.TombstoneProjections) > 0 && p.TombstoneCondition == "" {
+			return fmt.Errorf("lake %q: projection %q: tombstone_projections set without tombstone_condition", tenant, p.Name)
+		}
+		for _, tp := range p.TombstoneProjections {
+			if !projections[tp] {
+				return fmt.Errorf("lake %q: projection %q: tombstone projection %q is not declared in this artifact", tenant, p.Name, tp)
+			}
 		}
 		if err := validateBareSelect(p.DeriveSQL, true); err != nil {
-			return fmt.Errorf("tenant %q: projection %q: derive_sql: %w", tenant, p.Name, err)
+			return fmt.Errorf("lake %q: projection %q: derive_sql: %w", tenant, p.Name, err)
 		}
 	default:
-		return fmt.Errorf("tenant %q: projection %q: unknown kind %q", tenant, p.Name, p.Kind)
+		return fmt.Errorf("lake %q: projection %q: unknown kind %q", tenant, p.Name, p.Kind)
 	}
 
 	for _, k := range p.KeyColumns {
@@ -518,7 +558,7 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 		{"bump_column", p.BumpColumn}, {"bump_time_column", p.BumpTimeColumn},
 	} {
 		if opt.val != "" && !isIdent(opt.val) {
-			return fmt.Errorf("tenant %q: projection %q: %s %q is not a valid identifier", tenant, p.Name, opt.field, opt.val)
+			return fmt.Errorf("lake %q: projection %q: %s %q is not a valid identifier", tenant, p.Name, opt.field, opt.val)
 		}
 	}
 	return nil
@@ -526,15 +566,15 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 
 func (v ViewDecl) validate(tenant string) error {
 	if !isIdent(v.Name) {
-		return fmt.Errorf("tenant %q: view name %q is not a valid identifier", tenant, v.Name)
+		return fmt.Errorf("lake %q: view name %q is not a valid identifier", tenant, v.Name)
 	}
 	switch v.Kind {
 	case "", ViewKindView, ViewKindSeed:
 	default:
-		return fmt.Errorf("tenant %q: view %q: unknown kind %q", tenant, v.Name, v.Kind)
+		return fmt.Errorf("lake %q: view %q: unknown kind %q", tenant, v.Name, v.Kind)
 	}
 	if err := validateBareSelect(v.SQL, true); err != nil {
-		return fmt.Errorf("tenant %q: view %q: sql: %w", tenant, v.Name, err)
+		return fmt.Errorf("lake %q: view %q: sql: %w", tenant, v.Name, err)
 	}
 	return nil
 }
@@ -542,10 +582,10 @@ func (v ViewDecl) validate(tenant string) error {
 func (i IngestDecl) validate(tenant string, streams map[string]StreamDecl) error {
 	stream, ok := streams[i.Stream]
 	if !ok {
-		return fmt.Errorf("tenant %q: ingest references undeclared stream %q", tenant, i.Stream)
+		return fmt.Errorf("lake %q: ingest references undeclared stream %q", tenant, i.Stream)
 	}
 	if i.Source != "" && !isIdent(i.Source) {
-		return fmt.Errorf("tenant %q: ingest source %q is not a valid identifier", tenant, i.Source)
+		return fmt.Errorf("lake %q: ingest source %q is not a valid identifier", tenant, i.Source)
 	}
 
 	slice := i.SliceColumn
@@ -553,26 +593,29 @@ func (i IngestDecl) validate(tenant string, streams map[string]StreamDecl) error
 		slice = "src_slice"
 	}
 	if !streamHasColumn(stream, slice) {
-		return fmt.Errorf("tenant %q: ingest slice column %q is not a column of stream %q", tenant, slice, i.Stream)
+		return fmt.Errorf("lake %q: ingest slice column %q is not a column of stream %q", tenant, slice, i.Stream)
 	}
 	if i.Envelope != "" && i.EnvelopeRef != "" {
-		return fmt.Errorf("tenant %q: ingest declares both envelope and envelope_ref", tenant)
+		return fmt.Errorf("lake %q: ingest declares both envelope and envelope_ref", tenant)
 	}
-	if i.SealMarginMinutes < 0 {
-		return fmt.Errorf("tenant %q: ingest seal_margin_minutes must be >= 0", tenant)
+	if i.SealMarginMinutes < -1 {
+		return fmt.Errorf("lake %q: ingest seal_margin_minutes must be -1 (gate disabled), 0 (default) or >= 1", tenant)
 	}
 	return nil
 }
 
-func validTenantName(name string) error {
+func validLakeName(name string) error {
 	if name == "" {
-		return fmt.Errorf("tenant declaration has no name")
+		return fmt.Errorf("lake declaration has no name")
 	}
 	if !isLowerIdent(name) {
-		return fmt.Errorf("tenant name %q must be a lowercase identifier ([a-z][a-z0-9_]*)", name)
+		return fmt.Errorf("lake name %q must be a lowercase identifier ([a-z][a-z0-9_]*)", name)
 	}
-	if reservedTenantNames[name] || strings.HasPrefix(name, "solid") {
-		return fmt.Errorf("tenant name %q is reserved", name)
+	if ReservedLakeNames[name] || strings.HasPrefix(name, "solid") {
+		return fmt.Errorf("lake name %q is reserved", name)
+	}
+	if strings.HasSuffix(name, "_admin") {
+		return fmt.Errorf("lake name %q is reserved (the _admin suffix is the admin-schema namespace: lake foo's unscoped surfaces serve as foo_admin)", name)
 	}
 	return nil
 }
@@ -640,7 +683,11 @@ func isDuckType(t string) bool {
 // allowWith, WITH), never SELECT DISTINCT/ALL (the engine splices bookkeeping
 // columns after the leading SELECT). An author guardrail mirrored from the
 // platform, not a security boundary — the platform re-validates and the SQL
-// runs under the statement log and engine caps regardless.
+// runs under the statement log and engine caps regardless. KNOWN LIMITATION
+// (matches the platform's own scan): a literal ';' inside a string constant
+// false-positives as a second statement — rewrite the literal (e.g. CHR(59))
+// or restructure; accepted because the platform-side check trips on the same
+// input, so failing early here is strictly kinder.
 func validateBareSelect(q string, allowWith bool) error {
 	s := strings.TrimSpace(q)
 	if s == "" {
