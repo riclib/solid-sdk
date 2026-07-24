@@ -342,11 +342,11 @@ func (t LakeArtifact) Validate() error {
 		names[s.Name] = true
 	}
 
-	copies := map[string]bool{}
+	copies := map[string]ProjectionDecl{}
 	projections := map[string]bool{}
 	for _, p := range t.Projections {
 		if p.Kind == ProjectionCopy {
-			copies[p.Name] = true
+			copies[p.Name] = p
 		}
 		projections[p.Name] = true
 	}
@@ -459,7 +459,7 @@ func (s StreamDecl) validate(tenant string) error {
 	return nil
 }
 
-func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies, projections map[string]bool) error {
+func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies map[string]ProjectionDecl, projections map[string]bool) error {
 	if !isIdent(p.Name) {
 		return fmt.Errorf("lake %q: projection name %q is not a valid identifier", tenant, p.Name)
 	}
@@ -524,11 +524,28 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 		if p.DeriveSQL == "" || p.DeriveFrom == "" {
 			return fmt.Errorf("lake %q: projection %q: derive requires derive_sql and derive_from", tenant, p.Name)
 		}
-		if !copies[p.DeriveFrom] {
+		from, isCopy := copies[p.DeriveFrom]
+		if !isCopy {
 			return fmt.Errorf("lake %q: projection %q: derive_from %q is not a copy projection in this artifact", tenant, p.Name, p.DeriveFrom)
 		}
 		if len(p.KeyColumns) == 0 {
 			return fmt.Errorf("lake %q: projection %q: derive requires key_columns", tenant, p.Name)
+		}
+		// The platform's touched-key scoping reads a derive's key columns FROM
+		// THE SOURCE TABLE (which keys did this gen touch?), so every key must
+		// be a column of the DeriveFrom copy — a computed (SELECT-expression)
+		// key cannot exist. Checkable only when the copy is transform-less
+		// (its surface = its stream); a transform reshapes the surface, so the
+		// keys are ident-checked only. The M4 proof run found this the hard
+		// way: a derive keyed on date_trunc('week', …) fails at Bind.
+		if from.TransformSQL == "" {
+			if srcStream, ok := streams[from.Stream]; ok {
+				for _, k := range p.KeyColumns {
+					if !streamHasColumn(srcStream, k) {
+						return fmt.Errorf("lake %q: projection %q: derive key column %q is not a column of derive_from %q (stream %q) — touched-key scoping reads keys from the source table; carry the key on the wire", tenant, p.Name, k, p.DeriveFrom, from.Stream)
+					}
+				}
+			}
 		}
 		if !strings.Contains(p.DeriveSQL, "{from}") {
 			return fmt.Errorf("lake %q: projection %q: derive_sql must read the {from} token (the platform substitutes the schema-qualified derive_from table)", tenant, p.Name)

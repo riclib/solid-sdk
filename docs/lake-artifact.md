@@ -122,6 +122,12 @@ Both read their source through the **`{from}` token** — the platform
 substitutes the schema-qualified table; never write the table name yourself
 (`Validate` refuses SQL without the token).
 
+**Derive keys must be SOURCE columns.** The platform's touched-key scoping
+reads a derive's `KeyColumns` from the DeriveFrom table (which keys did this
+gen touch?), so a computed key — `date_trunc('week', …)` — cannot exist:
+carry the dimension on the wire (a `week` column your writer stamps) and key
+on that. `Validate` enforces it for transform-less copies.
+
 **The arrival-gen column is `"__gen"`.** The lake's landing column is the
 reserved `gen`, but the SERVED projection tables `{from}` reads expose the
 arrival gen as the platform's bookkeeping column `__gen` (quote it — the

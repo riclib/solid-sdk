@@ -172,6 +172,10 @@ func TestLakeArtifact_ValidateRejects(t *testing.T) {
 		{"bump pair split", func(a *contract.LakeArtifact) {
 			a.Projections[2].BumpColumn = "bumped"
 		}, "set together"},
+		{"derive key not a source column", func(a *contract.LakeArtifact) {
+			a.Projections[2].KeyColumns = []string{"deal_id", "computed_week"}
+			a.Projections[2].DeriveSQL = "SELECT deal_id, date_trunc('week', event_time) AS computed_week, SUM(amount) AS total FROM {from} GROUP BY 1, 2"
+		}, "touched-key scoping"},
 		{"unknown projection kind", func(a *contract.LakeArtifact) {
 			a.Projections[0].Kind = "mirror"
 		}, "unknown kind"},
