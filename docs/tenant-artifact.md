@@ -59,10 +59,10 @@ contract.TenantArtifact{
         {Name: "events_copy", Stream: "sales_events", Kind: contract.ProjectionCopy},
         {Name: "deal_totals", Stream: "sales_events", Kind: contract.ProjectionDerive,
          DeriveFrom: "events_copy", KeyColumns: []string{"deal_id"},
-         DeriveSQL: "SELECT deal_id, SUM(amount) AS total FROM events_copy GROUP BY deal_id"},
+         DeriveSQL: "SELECT deal_id, SUM(amount) AS total FROM {from} GROUP BY deal_id"},
     },
     Views: []contract.ViewDecl{
-        {Name: "open_deals", SQL: "SELECT * FROM deals_latest WHERE status = 'open'"},
+        {Name: "open_deals", SQL: "SELECT * FROM salesdemo.deals_latest WHERE status = 'open'"},
         {Name: "thresholds", Kind: contract.ViewKindSeed,
          SQL: "SELECT * FROM (VALUES (1, 100)) t(rule_id, threshold)"},
     },
@@ -104,12 +104,25 @@ Three kinds, mirroring the platform's workspace-store engine:
 |---|---|---|
 | `copy` | the full event history | — (`TransformSQL` optional) |
 | `latest` | current state per key (state changes) | `KeyColumns`, `TimeColumn` |
-| `derive` | aggregates that must never drift (recompute-and-replace) | `DeriveSQL`, `DeriveFrom` (a `copy` in this artifact), `KeyColumns` |
+| `derive` | aggregates that must never drift (recompute-and-replace) | `DeriveSQL` (reads `{from}`), `DeriveFrom` (a `copy` in this artifact), `KeyColumns` |
 
 SQL guardrails (mirrored from the platform's projector; the platform
 re-validates and your statements run under the statement log and engine
 caps): single statement only; `TransformSQL` is a bare `SELECT` — no `WITH`,
 no `SELECT DISTINCT/ALL`; `DeriveSQL` may be `SELECT` or `WITH…SELECT`.
+Both read their source through the **`{from}` token** — the platform
+substitutes the schema-qualified table; never write the table name yourself.
+
+**Ordering grain.** `latest` picks the observation with the highest **gen**,
+and the FILE-door lands one gen per file — so the landed file is the ordering
+grain. Two updates of one key inside a single file tie (unspecified winner);
+an update that must win rides a later file. Hour-sliced datagen output gets
+this right by construction.
+
+**Schema naming.** Projections serve under the DuckDB schema named after the
+tenant (`<tenant>.<table>`); unscoped surfaces under `<tenant>_admin`. This
+is also why tenant names must avoid DuckDB's own schemas (`main`, `temp`,
+`system`, …) — Validate refuses them.
 
 **Scoped vs unscoped.** By default a projection binds once per workspace in
 the roster, and the platform adds the `workspace` label predicate — each
@@ -129,7 +142,9 @@ supplies the `CREATE` wrapper, so a declaration can never smuggle DDL/DML:
   reference data, never overwritten by a re-bind.
 
 `Unscoped` on a view applies it in the admin engine instead of each
-workspace engine.
+workspace engine. View SQL runs at query time in the reader's session, so it
+must **schema-qualify** the projection tables it reads (`FROM
+<tenant>.<table>`, or `<tenant>_admin.<table>` for unscoped surfaces).
 
 ## Ingest — the FILE door
 
@@ -176,4 +191,6 @@ too (discovery never exceeds the served surface).
 
 `Validate` refuses tenant names that collide with the estate's in-tree
 tenants — `conversations`, `metrics`, `audit`, `solidmon`, `adf_ops`,
-`cdhkpi` — and anything prefixed `solid`. The reserved list is additive-only.
+`cdhkpi` — plus DuckDB's own schemas (`main`, `temp`, `system`,
+`information_schema`, `pg_catalog`) and anything prefixed `solid`. The
+reserved list is additive-only.

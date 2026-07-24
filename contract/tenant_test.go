@@ -36,7 +36,7 @@ func validTenant() contract.TenantArtifact {
 			{Name: "events_copy", Stream: "sales_events", Kind: contract.ProjectionCopy},
 			{Name: "deal_totals", Stream: "sales_events", Kind: contract.ProjectionDerive,
 				DeriveFrom: "events_copy",
-				DeriveSQL:  "SELECT deal_id, SUM(amount) AS total FROM events_copy GROUP BY deal_id",
+				DeriveSQL:  "SELECT deal_id, SUM(amount) AS total FROM {from} GROUP BY deal_id",
 				KeyColumns: []string{"deal_id"}},
 			{Name: "admin_events", Stream: "sales_events", Kind: contract.ProjectionCopy, Unscoped: true},
 		},
@@ -72,6 +72,7 @@ func TestTenantArtifact_ValidateRejects(t *testing.T) {
 		{"reserved metrics", func(a *contract.TenantArtifact) { a.Name = "metrics" }, "reserved"},
 		{"reserved solidmon tenant", func(a *contract.TenantArtifact) { a.Name = "adf_ops" }, "reserved"},
 		{"reserved solid prefix", func(a *contract.TenantArtifact) { a.Name = "solidx" }, "reserved"},
+		{"reserved duckdb schema", func(a *contract.TenantArtifact) { a.Name = "main" }, "reserved"},
 		{"no streams", func(a *contract.TenantArtifact) { a.Streams = nil }, "at least one stream"},
 		{"duplicate stream", func(a *contract.TenantArtifact) {
 			a.Streams = append(a.Streams, a.Streams[0])
@@ -131,8 +132,14 @@ func TestTenantArtifact_ValidateRejects(t *testing.T) {
 			a.Projections[2].DeriveFrom = "deals_latest"
 		}, "not a copy projection"},
 		{"derive sql not a select", func(a *contract.TenantArtifact) {
-			a.Projections[2].DeriveSQL = "DELETE FROM events_copy"
+			a.Projections[2].DeriveSQL = "DELETE FROM {from}"
 		}, "must be a SELECT"},
+		{"derive sql without from token", func(a *contract.TenantArtifact) {
+			a.Projections[2].DeriveSQL = "SELECT deal_id FROM events_copy GROUP BY deal_id"
+		}, "{from}"},
+		{"bump pair split", func(a *contract.TenantArtifact) {
+			a.Projections[2].BumpColumn = "bumped"
+		}, "set together"},
 		{"unknown projection kind", func(a *contract.TenantArtifact) {
 			a.Projections[0].Kind = "mirror"
 		}, "unknown kind"},

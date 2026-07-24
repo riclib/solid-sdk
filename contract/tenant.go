@@ -140,7 +140,9 @@ type ProjectionDecl struct {
 	TransformSQL string `json:"transform_sql,omitempty"`
 
 	// DeriveSQL (derive only, required) is the aggregate recompute: a single
-	// SELECT or WITH…SELECT over DeriveFrom.
+	// SELECT or WITH…SELECT reading the `{from}` token — the platform
+	// substitutes it with the schema-qualified DeriveFrom table (never write
+	// the table name yourself; the projector owns the schema).
 	DeriveSQL string `json:"derive_sql,omitempty"`
 
 	// DeriveFrom (derive only, required) names the copy projection in this
@@ -269,6 +271,13 @@ var reservedTenantNames = map[string]bool{
 	"solidmon":      true,
 	"adf_ops":       true,
 	"cdhkpi":        true,
+	// The tenant name becomes the engine SCHEMA, so DuckDB's own schemas are
+	// reserved too.
+	"main":               true,
+	"temp":               true,
+	"system":             true,
+	"information_schema": true,
+	"pg_catalog":         true,
 }
 
 // reservedColumns are the lake's own landing columns; declaring one is
@@ -464,6 +473,12 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 		}
 		if len(p.KeyColumns) == 0 {
 			return fmt.Errorf("tenant %q: projection %q: derive requires key_columns", tenant, p.Name)
+		}
+		if !strings.Contains(p.DeriveSQL, "{from}") {
+			return fmt.Errorf("tenant %q: projection %q: derive_sql must read the {from} token (the platform substitutes the schema-qualified derive_from table)", tenant, p.Name)
+		}
+		if (p.BumpColumn == "") != (p.BumpTimeColumn == "") {
+			return fmt.Errorf("tenant %q: projection %q: bump_column and bump_time_column must be set together", tenant, p.Name)
 		}
 		if err := validateBareSelect(p.DeriveSQL, true); err != nil {
 			return fmt.Errorf("tenant %q: projection %q: derive_sql: %w", tenant, p.Name, err)
