@@ -45,9 +45,9 @@ func validTenant() contract.TenantArtifact {
 			{Name: "thresholds", Kind: contract.ViewKindSeed,
 				SQL: "SELECT * FROM (VALUES (1, 100)) t(rule_id, threshold)"},
 		},
-		Ingest: &contract.IngestDecl{
+		Ingests: []contract.IngestDecl{{
 			Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson",
-		},
+		}},
 		Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
 		Binding:   contract.TenantBindingSolution,
 	}
@@ -150,15 +150,18 @@ func TestTenantArtifact_ValidateRejects(t *testing.T) {
 			a.Views[0].SQL = "DROP TABLE deals_latest"
 		}, "must be a SELECT"},
 		{"ingest unknown stream", func(a *contract.TenantArtifact) {
-			a.Ingest.Stream = "ghost"
+			a.Ingests[0].Stream = "ghost"
 		}, "undeclared stream"},
 		{"ingest slice column missing", func(a *contract.TenantArtifact) {
-			a.Ingest.SliceColumn = "missing_slice"
+			a.Ingests[0].SliceColumn = "missing_slice"
 		}, "not a column of stream"},
 		{"ingest both envelope forms", func(a *contract.TenantArtifact) {
-			a.Ingest.Envelope = "columns: []"
-			a.Ingest.EnvelopeRef = "databricks-audit"
+			a.Ingests[0].Envelope = "columns: []"
+			a.Ingests[0].EnvelopeRef = "databricks-audit"
 		}, "both envelope and envelope_ref"},
+		{"duplicate ingest source", func(a *contract.TenantArtifact) {
+			a.Ingests = append(a.Ingests, a.Ingests[0])
+		}, "duplicate ingest source"},
 		{"retention missing", func(a *contract.TenantArtifact) {
 			a.Retention = contract.RetentionDecl{}
 		}, "retention is required"},
@@ -208,7 +211,7 @@ func TestTenantArtifact_JSONStable(t *testing.T) {
 	if string(b) != string(b2) {
 		t.Fatalf("round-trip not lossless:\n%s\nvs\n%s", b, b2)
 	}
-	for _, field := range []string{`"name"`, `"streams"`, `"projections"`, `"views"`, `"ingest"`, `"retention"`, `"binding"`, `"key_columns"`, `"time_column"`, `"derive_sql"`, `"derive_from"`, `"unscoped"`, `"class"`, `"days"`} {
+	for _, field := range []string{`"name"`, `"streams"`, `"projections"`, `"views"`, `"ingests"`, `"retention"`, `"binding"`, `"key_columns"`, `"time_column"`, `"derive_sql"`, `"derive_from"`, `"unscoped"`, `"class"`, `"days"`} {
 		if !strings.Contains(string(b), field) {
 			t.Fatalf("wire JSON missing field %s:\n%s", field, b)
 		}

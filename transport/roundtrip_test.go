@@ -661,7 +661,7 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 			{Name: "deals_latest", Stream: "sales_events", Kind: contract.ProjectionLatest,
 				KeyColumns: []string{"deal_id"}, TimeColumn: "event_time"},
 		},
-		Ingest:    &contract.IngestDecl{Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson"},
+		Ingests:   []contract.IngestDecl{{Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson"}},
 		Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
 		Binding:   contract.TenantBindingSolution,
 	}
@@ -689,7 +689,7 @@ func TestTenantArtifact_RoundTrip(t *testing.T) {
 		if got.Name != "salesdemo" || len(got.Streams) != 1 || len(got.Streams[0].Columns) != 5 ||
 			got.Streams[0].Columns[0].Role != contract.RoleTime ||
 			len(got.Projections) != 1 || got.Projections[0].Kind != contract.ProjectionLatest ||
-			got.Ingest == nil || got.Ingest.SourceKind != "test_local" ||
+			len(got.Ingests) != 1 || got.Ingests[0].SourceKind != "test_local" ||
 			got.Retention.Class != contract.RetentionWindow || got.Retention.Days != 90 ||
 			got.Binding != contract.TenantBindingSolution {
 			t.Fatalf("tenant did not round-trip: %+v", got)

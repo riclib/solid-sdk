@@ -66,9 +66,9 @@ contract.TenantArtifact{
         {Name: "thresholds", Kind: contract.ViewKindSeed,
          SQL: "SELECT * FROM (VALUES (1, 100)) t(rule_id, threshold)"},
     },
-    Ingest: &contract.IngestDecl{
+    Ingests: []contract.IngestDecl{{
         Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson",
-    },
+    }},
     Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
     Binding:   contract.TenantBindingSolution,
 }
@@ -150,8 +150,10 @@ must **schema-qualify** the projection tables it reads (`FROM
 
 There is **no special ingest API**. Your writer emits envelope files (NDJSON)
 into a source the platform walks — the same production pipeline the in-tree
-systems use, pointed at your files. Declaring `Ingest` materializes the
-generic FILE-door runnable plus a job seeded **DISABLED** (operator enables):
+systems use, pointed at your files. Each `Ingests` entry materializes a
+generic FILE-door runnable plus a job seeded **DISABLED** (operator enables)
+— one door per file-fed stream, all typically walking the same configured
+source with per-stream `SourcePattern`s:
 
 - walk the declared source (`SourceKind` + `SourcePattern`),
 - skip slices younger than the seal margin (`SealMarginMinutes`, default 15),

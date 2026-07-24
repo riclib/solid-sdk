@@ -50,10 +50,12 @@ type TenantArtifact struct {
 	// platform's engine funnel at bind time.
 	Views []ViewDecl `json:"views,omitempty"`
 
-	// Ingest, when set, materializes the generic FILE-door ingest runnable
-	// for this tenant plus a seeded DISABLED job (the operator enables it —
-	// the S-1852 convention).
-	Ingest *IngestDecl `json:"ingest,omitempty"`
+	// Ingests, when set, materialize the generic FILE-door ingest: one
+	// runnable + one seeded DISABLED job PER entry (the operator enables —
+	// the S-1852 convention). One entry per stream that lands from files; a
+	// tenant fed entirely over another wire declares none. (Plural since the
+	// first real consumer: a demo with three streams needs three doors.)
+	Ingests []IngestDecl `json:"ingests,omitempty"`
 
 	// Retention is REQUIRED and always explicit: "forever" must be declared,
 	// never defaulted (the full-mirror ruling is per-system). Demos declare
@@ -207,8 +209,8 @@ type IngestDecl struct {
 	// Stream is the declared stream files land into.
 	Stream string `json:"stream"`
 
-	// Source is the lake landing-source name within the tenant. Default
-	// "ingest" when empty.
+	// Source is the lake landing-source name within the tenant. Default:
+	// the target Stream's name (source names must be unique per tenant).
 	Source string `json:"source,omitempty"`
 
 	// SourceKind / SourcePattern bind the platform-side source the runnable
@@ -236,6 +238,15 @@ type IngestDecl struct {
 	// Schedule is the seeded job's cron expression. Default hourly
 	// ("0 * * * *") when empty. The job is always seeded DISABLED.
 	Schedule string `json:"schedule,omitempty"`
+}
+
+// SourceName resolves the ingest's lake landing-source name (default: the
+// target stream's name).
+func (i IngestDecl) SourceName() string {
+	if i.Source != "" {
+		return i.Source
+	}
+	return i.Stream
 }
 
 // RetentionClass enumerates the retention classes.
@@ -343,10 +354,16 @@ func (t TenantArtifact) Validate() error {
 		names[v.Name] = true
 	}
 
-	if t.Ingest != nil {
-		if err := t.Ingest.validate(t.Name, streams); err != nil {
+	ingestSources := map[string]bool{}
+	for _, ing := range t.Ingests {
+		if err := ing.validate(t.Name, streams); err != nil {
 			return err
 		}
+		src := ing.SourceName()
+		if ingestSources[src] {
+			return fmt.Errorf("tenant %q: duplicate ingest source %q", t.Name, src)
+		}
+		ingestSources[src] = true
 	}
 
 	switch t.Retention.Class {
@@ -530,6 +547,7 @@ func (i IngestDecl) validate(tenant string, streams map[string]StreamDecl) error
 	if i.Source != "" && !isIdent(i.Source) {
 		return fmt.Errorf("tenant %q: ingest source %q is not a valid identifier", tenant, i.Source)
 	}
+
 	slice := i.SliceColumn
 	if slice == "" {
 		slice = "src_slice"
