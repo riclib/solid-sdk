@@ -211,6 +211,7 @@ toolkit validates against:
 | [`workflow-defs.md`](./docs/workflow-defs.md) | the workflow YAML your solution ships (when to act) | SHIPPED 1.0.1 |
 | [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.14.1 |
 | [`incremental-load-pipeline.md`](./docs/incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
+| [`tenant-artifact.md`](./docs/tenant-artifact.md) | declaring a lake tenant (streams, projections, views, ingest, retention) from a solution | DRAFT 0.1.0 |
 
 ## Versions & support
 

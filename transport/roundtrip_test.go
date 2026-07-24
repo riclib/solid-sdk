@@ -625,3 +625,89 @@ func TestCallTool_NoResponder(t *testing.T) {
 		t.Fatal("expected transport error calling an unserved tool, got nil")
 	}
 }
+
+// TestTenantArtifact_RoundTrip proves the lake-tenant declaration (S-1874)
+// announces as its own typed leaf and assembles back field-for-field — the
+// one artifact whose declaration is typed rather than an opaque Body, since
+// the platform enforces its fields at materialization. Also proves the
+// publish-side fail-fast: an invalid declaration refuses to publish at all.
+func TestTenantArtifact_RoundTrip(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	tenant := contract.TenantArtifact{
+		Name:   "salesdemo",
+		Source: "salesdemo",
+		Streams: []contract.StreamDecl{{
+			Name: "sales_events",
+			Columns: []contract.ColumnDecl{
+				{Name: "event_time", Type: "TIMESTAMP", Role: contract.RoleTime},
+				{Name: "workspace", Type: "VARCHAR"},
+				{Name: "deal_id", Type: "VARCHAR"},
+				{Name: "amount", Type: "DECIMAL(18,2)"},
+				{Name: "src_slice", Type: "VARCHAR"},
+			},
+			Labels: []string{"workspace"},
+		}},
+		Projections: []contract.ProjectionDecl{
+			{Name: "deals_latest", Stream: "sales_events", Kind: contract.ProjectionLatest,
+				KeyColumns: []string{"deal_id"}, TimeColumn: "event_time"},
+		},
+		Ingest:    &contract.IngestDecl{Stream: "sales_events", SourceKind: "test_local", SourcePattern: "demo/*.ndjson"},
+		Retention: contract.RetentionDecl{Class: contract.RetentionWindow, Days: 90},
+		Binding:   contract.TenantBindingSolution,
+	}
+
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name:        "salesdemo",
+		DisplayName: "Sales Demo",
+		Version:     "0.1.0",
+		Tenants:     []contract.TenantArtifact{tenant},
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Tenants) != 1 {
+			t.Fatalf("expected 1 tenant, got %d", len(sol.Tenants))
+		}
+		got := sol.Tenants[0]
+		if got.Name != "salesdemo" || len(got.Streams) != 1 || len(got.Streams[0].Columns) != 5 ||
+			got.Streams[0].Columns[0].Role != contract.RoleTime ||
+			len(got.Projections) != 1 || got.Projections[0].Kind != contract.ProjectionLatest ||
+			got.Ingest == nil || got.Ingest.SourceKind != "test_local" ||
+			got.Retention.Class != contract.RetentionWindow || got.Retention.Days != 90 ||
+			got.Binding != contract.TenantBindingSolution {
+			t.Fatalf("tenant did not round-trip: %+v", got)
+		}
+		if len(sol.Manifest.Artifacts) != 1 || sol.Manifest.Artifacts[0].Kind != contract.ArtifactTenant {
+			t.Fatalf("expected one tenant artifact ref, got %+v", sol.Manifest.Artifacts)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+
+	// Publish-side fail-fast: a reserved tenant name never reaches the wire.
+	bad := tenant
+	bad.Name = "audit"
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name: "salesdemo", Tenants: []contract.TenantArtifact{bad},
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved-name publish refusal, got: %v", err)
+	}
+}
