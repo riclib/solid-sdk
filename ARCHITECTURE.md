@@ -18,8 +18,9 @@ solution imports it to *announce* its manifest and *serve* its tools.
 > (request-reply), **runnable** (platform→solution scheduled jobs over a
 > JetStream work-queue), **fire** (solution→platform workflow/skill trigger),
 > **heartbeat**, **asset**, **store proxy** (solution→platform request-reply,
-> S-1712), and **quack connect** (S-1728) with the `quack` engine-client
-> package as the paved road.
+> S-1712), **quack connect** (S-1728) with the `quack` engine-client
+> package as the paved road, and **screens** (S-1889 — the solution renders its
+> own configuration UI, the platform persists it).
 
 ## Why this exists
 
@@ -43,6 +44,7 @@ contract/   pure wire types — no behavior, no deps beyond stdlib
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
   runnable.go   the runnable wire — platform triggers a solution's long-running job (JetStream work-queue, progress streamed)
   fire.go       the fire wire — the inverse: solution asks the platform to run a workflow/skill in a workspace
+  screen.go     the screen wire — ScreenDescriptor (manifest declaration) + the render/submit envelope (ScreenRequest / ScreenContext / ScreenReply)
   lake.go       LakeArtifact — the lake a solution declares (streams, projections, views, ingests, retention); materialized by the platform on approval
   storeproxy.go StoreCall types — solution→platform request-reply (incl. the connect op)
 
@@ -50,6 +52,7 @@ transport/  thin nats.go helpers over the contract types
   announce.go        EnsureSolutionsBucket, PublishSolution, WatchSolutions   (KV tree)
   serve.go / call.go ServeTool (partner responder) / CallTool (platform caller)
   runnable*.go       runnable trigger + serve (work-queue both sides)
+  screen_serve.go    ServeScreen / ServeScreens / DispatchScreen — the SOLUTION half of the screen wire (an ordinary http.Handler behind the envelope)
   fire.go            fire-run caller
   heartbeat.go       solution liveness
   asset.go           asset leaves
@@ -243,6 +246,12 @@ statement-level attribution.
 - **Store proxy + quack connect** — the data plane: `StoreCall`
   (solution→platform request-reply, S-1712) and the connect op (S-1728) served
   by the `quack` package above.
+- **Screens** — `ScreenDescriptor` on the manifest (S-1889) declares a
+  configuration screen the SOLUTION renders and the PLATFORM persists, over
+  `ui.<solution>.<point>.<screen>` core-NATS request-reply. The serve adapter
+  (`transport.ServeScreen`) makes the envelope disappear — a screen author
+  writes a plain `http.Handler`. The platform-side client + the fragment
+  sanitizer stay in the platform by design. See `docs/screens.md`.
 - **Lake** — `LakeArtifact` leaves (S-1874) declare a full data
   plane: an append-only lake tenant + wsstore projections + bind-time views +
   the generic FILE-door ingest. Consumed by the platform's announced-tenant

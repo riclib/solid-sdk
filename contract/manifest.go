@@ -86,6 +86,20 @@ type SolutionManifest struct {
 	// consumer via a seed-mapped EventTrigger artifact — is the 0.3.0 direction;
 	// this v0 flag authorizes + surfaces the imperative fire path.
 	Fires []FireDescriptor `json:"fires,omitempty"`
+
+	// Screens declares the configuration SCREENS this solution renders over the
+	// screen wire (`ui.<solution>.<point>.<screen>`, see ScreenSubject) — a
+	// CAPABILITY declaration like Fires, so it rides in the small manifest index
+	// rather than a KV leaf (a descriptor is five short strings; the HTML never
+	// travels the announce path, only the render reply). At approve time the
+	// platform grants the partner account ScreenSubjectPrefix and mounts each
+	// screen at its declared point.
+	//
+	// A declaration whose Point is EMPTY or UNKNOWN to the platform is DROPPED
+	// at announce: no tab, no subject grant, and the rest of the solution
+	// announces unaffected. Empty = the solution renders no screens. Additive +
+	// backward-compatible (a manifest without it round-trips fine).
+	Screens []ScreenDescriptor `json:"screens,omitempty"`
 }
 
 // Partner is the optional commercial identity of the organization shipping a

@@ -64,6 +64,14 @@ type SolutionPublish struct {
 	// declaration; see contract.FireDescriptor). Empty = the solution fires
 	// nothing.
 	Fires []contract.FireDescriptor
+
+	// Screens declares the configuration screens this solution renders over the
+	// screen wire — copied verbatim into the announced manifest's Screens block
+	// (a capability declaration; see contract.ScreenDescriptor). Serve them with
+	// ServeScreen, using the SAME descriptors announced here so the served
+	// subject and the declared tab cannot drift. Empty = the solution renders no
+	// screens.
+	Screens []contract.ScreenDescriptor
 }
 
 // EnsureSolutionsBucket creates-or-gets the solutions announce bucket. Mirrors
@@ -203,6 +211,19 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 		index = append(index, contract.ArtifactRef{Kind: contract.ArtifactLake, ID: lk.Name})
 	}
 
+	// Screens ride in the manifest index (no leaf), but they are checked HERE for
+	// the same partner-side fail-fast reason lakes are: a structurally broken
+	// declaration fails with a field-level error at publish instead of silently
+	// greying out a tab in someone else's shell. Only STRUCTURE is checked — an
+	// unknown Point is left to the platform to drop, so a solution on a newer SDK
+	// can declare a point an older platform has not opened yet.
+	for _, sc := range p.Screens {
+		if !sc.Valid() {
+			return fmt.Errorf("publish %q: screen %q: point, name and object_kind are all required (point=%q, object_kind=%q)",
+				p.Name, sc.Name, sc.Point, sc.ObjectKind)
+		}
+	}
+
 	// Purge leaves the previous publish had that this one drops.
 	if err := purgeStaleLeaves(ctx, kv, p.Name, index); err != nil {
 		return fmt.Errorf("publish %q: purge stale leaves: %w", p.Name, err)
@@ -220,6 +241,7 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 		Artifacts:    index,
 		Partner:      p.Partner,
 		Fires:        p.Fires,
+		Screens:      p.Screens,
 	}
 	if err := putLeaf(ctx, kv, contract.ManifestKey(p.Name), manifest); err != nil {
 		return fmt.Errorf("publish %q: manifest: %w", p.Name, err)

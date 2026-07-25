@@ -144,6 +144,32 @@ func StoreCallSubject(solution, op string) string {
 	return fmt.Sprintf("solid.store.call.%s.%s", solution, op)
 }
 
+// ScreenSubject is the core-NATS request-reply subject a solution serves one
+// declared configuration screen on: `ui.<solution>.<point>.<screen>` — e.g.
+// `ui.cdl-advisory.workspace.settings.advisory-scope`. The point segment is
+// itself dotted (`workspace.settings`), which is deliberate: it keeps the
+// hierarchy readable and lets a future grant narrow to one point
+// (`ui.<solution>.workspace.settings.>`) without a wire change.
+//
+// Like the tool / runnable / fire / store-call subjects, the shape IS the authz
+// boundary: a partner account is granted ScreenSubjectPrefix at approve time, so
+// a solution can only ever serve screens it declared in its manifest.
+//
+// Core NATS, not JetStream: a render sits in front of a browser request that is
+// already waiting, so an unanswered screen must fall back NOW (the platform
+// renders the object generically) rather than replay later.
+func ScreenSubject(solution, point, screen string) string {
+	return fmt.Sprintf("ui.%s.%s.%s", solution, point, screen)
+}
+
+// ScreenSubjectPrefix is the wildcard a partner account is granted at approve
+// time to serve all of a solution's declared screens (`ui.<solution>.>`) — one
+// permission covering every point and every screen, the way ToolSubjectPrefix
+// covers every tool.
+func ScreenSubjectPrefix(solution string) string {
+	return fmt.Sprintf("ui.%s.>", solution)
+}
+
 // StoreCallSubjectPrefix is the wildcard a partner account is granted publish on
 // to reach the store proxy for all of a solution's ops
 // (`solid.store.call.<solution>.>`) — the single permission that makes the

@@ -56,6 +56,7 @@ A **solution** is a domain capability. For a telecom operator:
 | **Dashboards** | what to watch — charts over your data, in YAML | declared |
 | **Workflows** | when to act — a scheduled check that runs a skill | declared |
 | **Tools / actions** | optional — let the agent *do* things, not just read | optional |
+| **Screens** | optional — your own configuration form, rendered by you, persisted by the platform ([`docs/screens.md`](./docs/screens.md)) | optional |
 
 Underneath, the platform does the heavy lifting — **connect → discover → keep.**
 Point it at a source (a blob store, a database, a file drop); it samples and learns
@@ -212,6 +213,7 @@ toolkit validates against:
 | [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.14.1 |
 | [`incremental-load-pipeline.md`](./docs/incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
 | [`lake-artifact.md`](./docs/lake-artifact.md) | declaring a lake (streams, projections, views, ingests, retention) from a solution | DRAFT 0.1.0 |
+| [`screens.md`](./docs/screens.md) | rendering your own configuration screens — you render and validate, the platform persists | DRAFT 0.1.0 |
 
 ## Versions & support
 
