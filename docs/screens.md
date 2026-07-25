@@ -109,8 +109,22 @@ and what it requires of your declaration.
 | everything else | RESERVED | Not open. A declaration naming one is dropped. |
 
 Points are named, not free-form, because each one is a promise about chrome the
-platform must actually keep. The list grows by decision — when a new surface is
-opened, with its own contract row — never by a solution inventing a string.
+platform must actually keep — placement, contract, grain and governance
+together. "What kind of screen is this" is a property of the socket, not
+something a screen gets to assert. The list grows by decision, when a new
+surface is opened with its own contract row, never by a solution inventing a
+string.
+
+Only `workspace.settings` exists today. The shape of the ones being considered
+(each opens when a real solution demands it, and **none of them is declarable
+yet**) is worth knowing while you design: a render-only panel on the solution's
+own operator card; an action point whose submit becomes a declared fire rather
+than an object; an estate-grained operator-shell point; a panel anchored on one
+lake record. Note what changes across them — some persist nothing at all — which
+is exactly why the point is required and never defaulted.
+
+Moving a screen to a different point changes its subject and forces a re-grant.
+That is the intended cost: points differ in blast radius.
 
 ## Writing the handler
 
