@@ -104,6 +104,32 @@ Rules (all enforced by `Validate`):
   must declare it and label it. Your writer (datagen, exporter) fills it with
   the owning workspace id per row.
 
+## Descriptions are metadata, not comments
+
+Every `description` you ship — on a stream column, a catalog body's tables
+and columns, a projection — is **read by two audiences you don't see**: the
+agent grounds on it when writing SQL against your data, and end users read it
+on the platform's catalog cards. It is product surface, not source
+annotation.
+
+The litmus test, sentence by sentence: *does this help someone USE the
+data?*
+
+**Ship it** — meaning; value domains (`status ∈ {covered, empty_slot,
+no_slot} — the coverage verdict for this app × obligation × day`); units and
+formulas (`cost_usd = (tokens)/1e6 * model_price`); join guidance (`join
+obligations.key for label + article`); windowing/anchoring guidance (`First
+event time (UTC). Window on it.`); caveats a querier needs (`always '' in
+v1`).
+
+**Keep it in your own source comments** — how the table is derived or built
+("a DERIVE over X", "content-free by construction"); internal effort or gap
+codenames; which dashboards/skills consume it; ticket references. Your
+declaration file has comments; that is where the engineering story lives.
+
+A good description is one or two sentences. If you find yourself explaining
+the pipeline, you are writing a comment into the product.
+
 ## Projections
 
 Three kinds, mirroring the platform's workspace-store engine:
