@@ -2,12 +2,12 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.17.0                                             │
+  │  Contract version : 0.18.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
   │                      the LLM; third parties write against this.        │
-  │  Last updated      : 2026-07-19                                        │
+  │  Last updated      : 2026-08-11                                        │
   │  Owner ticket      : S-1140 (design) / S-1524 (this correctness pass)  │
   │  Implements        : shipped — frame, macros, dialect (see §1.1)       │
   │  Supersedes        : the hand-rolled window SQL in                     │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.17.0 · Draft · `dsl_version: "0.17"`**
+**Contract version 0.18.0 · Draft · `dsl_version: "0.18"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -155,6 +155,7 @@ Runtime compatibility rule **(planned)**:
 | 0.15.0 | 2026-07-19 | Additive (heatmap time axes, v4 #882/#883/#884): new units `hour` and `auto` (`auto` derives bucket width from the resolved window targeting ~40 columns — 24h→1h, 7d→4h, year→weeks; frameless falls back to `day`). A time COLUMN axis is now **frame-driven**: buckets pre-seeded across the resolved window, dataless buckets render as empty cells instead of missing columns (time ROW axes unchanged). Duplicate cells now keep the **worst** status (severity: fail > warn > unknown > info > ok), replacing previously-unspecified last-write-wins — queries may emit one graded row per source point and let the widget fold. Dense axes (>16 cols) thin labels to every ~12th; cell tooltips keep the exact bucket. (heatmap-window-buckets) |
 | 0.16.0 | 2026-07-19 | Additive (nav groups, S-1771): new optional dashboard-level fields `group` (string) + `nav_order` (int). Dashboards sharing a `group` collapse into ONE workspace-nav item rendered as a dropdown of members; `nav_order` positions a dashboard in the nav and within its group (lower = first; unset keeps announce-order). Presentation only: `?page=<id>` deep links, drill-downs, and widget identity are untouched — the dropdown is chrome, not routing. Group display text is owned by the document; the platform never infers hierarchy from page-id segments. (nav-groups) |
 | 0.17.0 | 2026-07-19 | Additive (diagram widget, S-1785): new widget `kind: diagram` — one query's rows drawn as a mermaid flowchart, rendered SERVER-SIDE (no chart library, no client JS; the platform's diagram lightbox provides zoom/download). Each row is one EDGE; columns declared by name: `from` / `to` (required — the edge's node labels), optional `edge_label` (annotation on the arrow, e.g. a runs count) and `status` (accents the row's TARGET node: fail/error red, warn amber). Presentation fields: `direction` (LR default, TB/TD/RL/BT) and `limit` (edge cap, default 80 — overflow renders a "+M more edges not drawn" foot note, never silently). Nodes are the distinct labels, ids assigned in first-appearance order — ORDER BY the important edges first; the cap keeps the head. First consumer: solidmon.pipeline's wiring map (triggers → pipeline → children lineage). (diagram) |
+| 0.18.0 | 2026-08-11 | Additive (timeline widget, S-2160): new widget `kind: timeline` — one query → Gantt lanes, one lane per `row` value, a true bar per result row spanning `start`→`end` on a continuous time axis, colored by a **canonical status vocabulary** (`ok` / `warn` / `fail` / `running` / `queued` / `cancelled`; the QUERY maps raw system statuses, exactly as for the heatmap). New fields `start` / `end` / `key` (columns, by name) and the blocks `card:` (a declared hover-detail query) + `expand:` (a full nested sub-lane axis + query, itself nestable); reuses `row` / `value` / `limit` / `drilldown`. Two new macros, bound ONLY inside those sub-queries: `{{ key }}` (the hovered bar's `key` value) and `{{ row }}` (the expanded lane's key), both expanding to sanitized SQL literals. A NULL `end` means in-flight (the bar runs to now and keeps its status color); `key` is required exactly when a `card:` is declared, at every `expand:` level. The widget is **system-blind** — it knows lanes, bars, statuses and a window, nothing about the system that produced them. (timeline) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -431,13 +432,31 @@ a few-thousand metadata rows is instant (see
 both SQL string literals (quote-doubling) and `ILIKE` wildcards (`%` / `_` / `\`
 are treated as literals via an explicit `ESCAPE '\'`).
 
+**Mark macros** — resolve against the timeline sub-query's *mark* (§8.5):
+
+| Macro | Intent | Bound in | Expansion | Elsewhere |
+|---|---|---|---|---|
+| `{{ key }}` | The hovered bar's identity | a timeline `card.query` | `'run-42'` (quoted literal) | *error* |
+| `{{ row }}` | The expanded lane's key | a timeline `expand.query` | `'nightly-load'` (quoted literal) | *error* |
+
+Both take no arguments and both render the value as a **string literal**, escaped
+the same way a `value_type: string` variable is (quote-doubling) — a mark value is
+data (a run id, a pipeline name), never an identifier. Outside the sub-query that
+binds it a mark macro is a **hard error**, not an empty expansion: a query written
+against a mark that isn't there would otherwise silently match nothing.
+
+Sub-queries are ordinary dashboard queries in every other respect — they run
+through the same dialect, the same resolved frame and the same variables as the
+widget's own query, so `{{ timeFilter }}` and `{{ filter }}` work in them and a
+card obeys the picker window without the author repeating it.
+
 ### 6.3 Reserved names
 
-The macro names above (including `{{ search }}`), plus the document keys
+The macro names above (including `{{ search }}`, `{{ key }}` and `{{ row }}`), plus the document keys
 `dsl_version`, `id`, `title`, `header`, `default_source`, `variables`, `rows`,
 and the widget keys `kind`, `span`, `source`, `frame`, `lookback`, `refresh`,
 `searchable`, `search_columns`, `page_size`, `flat`, `drilldown`, `col`, `row`,
-`value`. New names enter via MINOR bumps.
+`value`, `start`, `end`, `key`, `card`, `expand`. New names enter via MINOR bumps.
 
 ### 6.4 Safety
 
@@ -738,6 +757,11 @@ dimension itself.)
   heading: name            # info-card — column rendered as each card's title
   body: detail             # info-card — optional column rendered as each card's prose body
   per_row: 4               # info-card — max cards per row (grid column ceiling; default 4, 1..12)
+  start: start_time        # timeline — bar start timestamp column (required)
+  end: end_time            # timeline — bar end column; NULL → in-flight
+  key: external_run_id     # timeline — per-bar identity; bound to {{ key }} in card.query
+  card: { query: "…" }     # timeline — declared hover-card detail query
+  expand: { row: …, start: …, value: …, query: "…" }   # timeline — nested sub-lane axis
 ```
 
 | `kind` | Shape | First-column convention |
@@ -752,6 +776,7 @@ dimension itself.)
 | `multistat` | series key + value → N tiles | `series` = tile label (default col[0]), `value` = big number (default col[1]); reuses `format`/`label`/`status_text`; `sort`/`limit` cap + order, overflow → "+M more" |
 | `info-card` | status + heading + body → N cards | Columns declared by name — `heading` = card title (required), `status` = semantic `StatusLevel` pill (required; unknown → neutral, never an error), `body` = optional prose. `per_row` caps the adaptive grid columns (default 4, 1..12); `sort`/`limit` order + cap, overflow → "+M more". A one-row query renders one standalone card (same path). |
 | `diagram` | edge rows → mermaid flowchart | Columns by name — `from`/`to` (required), `edge_label`, `status` (§ changelog 0.17.0). Server-rendered SVG; `direction` + `limit` presentation fields; overflow → foot note. |
+| `timeline` | lane × time Gantt | Columns by name — `row` (the lane axis, categorical), `start` (required), `end` (optional; NULL → in-flight), `value` (canonical status), `key` (per-bar identity). Optional `card:` / `expand:` blocks (§8.5); reuses `limit` (lane cap) + `drilldown` (`{row}`). One row per BAR — reruns of the same entity share a lane. |
 | `text` | single string | first cell of the first row, coerced to string; plain HTML-escaped text (no markdown at v1) |
 
 Projection details (empty handling, formatters) live with the widget renderers
@@ -913,6 +938,121 @@ rather than a numeric strip. Columns are declared **by name**:
 - `sort` / `limit` mirror `multistat`: sort orders before the cap keeps the
   top-N, and overflow collapses into a trailing "+M more" cell.
 
+### 8.5 Timeline (`row` / `start` / `end` / `value` / `key`, `card`, `expand`)
+
+A `kind: timeline` projects **one row → one bar**: lanes down the left (one per
+distinct `row` value), a continuous time axis across, and a true bar per result
+row spanning `start`→`end`, colored by `value`. It expresses what a bucket
+heatmap structurally cannot — **duration, overlap and cadence**.
+
+The widget is **system-blind**: it knows lanes, bars, statuses and a window.
+Mapping a system's raw statuses onto the canonical vocabulary is the **query's**
+job, exactly as for the heatmap — which is what lets the same widget serve ADF
+runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
+
+```yaml
+- id: run-timeline
+  kind: timeline
+  span: 12
+  row: run_name             # lane axis (categorical — time is the bar track, not the lane axis)
+  start: start_time         # bar start (timestamp column)
+  end: end_time             # bar end; NULL → in-flight (bar runs to now, status color kept)
+  value: status             # canonical status — map raw values in SQL
+  key: external_run_id      # per-bar identity; the {{ key }} the card query receives
+  frame: window
+  limit: 200                # optional lane cap; overflow reported in the tile foot
+  drilldown: { target: adf.pipeline, params: { pipeline: "{row}" } }
+  card:                     # optional — solution-declared hover detail
+    query: |
+      SELECT status, start_time, end_time, duration_ms, trigger_name
+      FROM runs WHERE external_run_id = {{ key }}
+  expand:                   # optional — a FULL nested axis declaration
+    row: activity_name
+    start: activity_start
+    end: activity_end
+    value: status
+    key: activity_run_id
+    query: |
+      SELECT … FROM activities a JOIN runs r USING (run_id)
+      WHERE r.run_name = {{ row }} AND {{ timeFilter "activity_start" }}
+    # expand: may nest again — an ExecutePipeline activity opens its child's runs
+  source: { store: ops, query: "SELECT … WHERE {{ timeFilter \"start_time\" }}" }
+```
+
+**Canonical status vocabulary.** `ok` / `warn` / `fail` / `running` / `queued` /
+`cancelled`. Map in SQL — `CASE status WHEN 'Succeeded' THEN 'ok' WHEN 'InProgress'
+THEN 'running' … END` — the heatmap precedent. Unrecognised values still render
+(with the neutral color and their own legend entry) rather than being hidden: the
+widget shows what the query gave it. Severity for "worst of a merged segment" is
+`fail > warn > running > ok/queued/cancelled`.
+
+- **`row` is categorical by construction.** Declaring `type: time` on it is a
+  validation error — the continuous time dimension is the bar track.
+- **`end` is optional; `key` is required exactly when you declare a `card:`.**
+  A NULL / unparseable end means **in-flight**: the bar extends to now (never
+  past the window, never into the future) and keeps its status color. Omitting
+  the `end:` column entirely renders every row in-flight (the point-event
+  degenerate case). `key` is what `{{ key }}` binds, so a card without one has
+  nothing to look up — and because a **sub-lane** bar opens the same card a
+  top-level bar does, a card-bearing timeline needs `key` **at every `expand:`
+  level too**. The validator enforces all of this at register; without the
+  check the failure is silent (sub-lane bars fall back to the plain hover title
+  and the declared card is simply never seen).
+- **Reruns share a lane.** Two runs of the same entity, disjoint in time, sit
+  side by side on one lane. A row whose `start` cannot be parsed is dropped —
+  inventing a start would draw a run that never happened.
+- **The window is the picker window**, not the data extent: gaps stay visible.
+  Bars straddling an edge are clamped; bars wholly outside are not rendered.
+- **Density budget.** Bar geometry is computed as a percentage of the window,
+  and the projection merges same-lane runs that **start** within a few pixels of
+  each other — adjacent or **overlapping** — into one segment, colored by the
+  **worst** status and titled `"N runs · worst: fail"`. Because the rule bounds
+  segment *starts*, the node count per lane is capped whatever the run durations
+  do: a lane of long, heavily-overlapping runs (the concurrent-rerun shape) is
+  bounded exactly like a lane of short sequential ones. This happens
+  **server-side**, so a dense window never serialises thousands of nodes. A
+  merged segment spans from its earliest start to its latest end, carries no
+  `key` (N runs have no single identity) and therefore no card query. A very
+  short run is floored at a visible minimum width rather than vanishing.
+- **Vertical budget.** Lanes have a minimum height and the widget body a maximum;
+  many lanes scroll (the time axis stays visible) rather than shrinking lanes to
+  fit. `limit` caps the lane count and any drop is reported, never silent.
+- **`card:`** is a declared query, not a registered handler — a solution stays
+  pure YAML. Its FIRST row renders (a query returning several rows for one key
+  is an authoring bug the card will not paper over); without a `card:` a bar
+  still carries a plain hover title. The card renderer is **generic**, because
+  it cannot know which columns a solution will select:
+  - **The card's heading is the bar's `key` VALUE** — the run id, not a name
+    column. If you want a human-readable heading, select the key column as
+    something readable, or read the name off a labelled row in the body. (When
+    a bar has no key at all, the heading falls back to the status.)
+  - Columns are classified by **SUFFIX**, not by exact name, so a solution's own
+    naming lands in the right slot: `status` / `*_status` → a status pill;
+    `start` / `start_time` / `*_start` / `*_start_time` → the span line's left
+    end; the matching `end` forms → its right end; `duration_ms` /
+    `*_duration_ms` → a formatted duration. Everything unrecognised falls
+    through as a labelled key→value row, in result-column order.
+  - **Where two columns match the same role, the LAST one in result-column
+    order wins** (for the start/end roles, the last one that parses as a
+    timestamp; a non-parsing candidate degrades to a plain labelled row rather
+    than being swallowed). A query selecting several time columns should
+    therefore put the pair it wants on the span line last.
+  - Duration is **derived from the span** when no duration column is present, so
+    a card never shows a start and an end while leaving the reader to subtract.
+- **`expand:`** is a full axis in its own right — `row` / `start` / `value`
+  required, `end` optional, `key` governed by the same rule as the parent's
+  (required iff the widget declares a `card:`) — plus its own `query`, bound to
+  the opened lane via `{{ row }}`. Sub-lanes ARE lanes: same bar maths, same window, same
+  density budget, same card mechanics. Nesting is bounded (5 levels).
+
+**Interactions** (platform-provided, nothing to declare): dragging horizontally
+across a lane zooms the dashboard's time range to the dragged span (the same
+per-tab absolute range the picker and calendar write, so every widget follows);
+hovering a bar opens its card; the card offers **Drill down** (the declared
+`drilldown`, current window) and **Drill down & zoom** (the same navigation with
+the range narrowed to the bar's span, padded); a merged segment offers **Zoom to
+segment**.
+
 ---
 
 ## 9. Validation & errors
@@ -942,8 +1082,18 @@ panic-at-register) and the template is linted at render time
    list-filter URL params, and a collision would let a seeded drill-down param be
    mistaken for one (or vice versa).
 
+7. **Timeline shape** *(load)* — a `kind: timeline` declares `row` (categorical
+   — `type: time` on the lane axis is rejected), `start` and `value`; a `card:`
+   declares both a `query` and a `key:`; an `expand:` is a full axis (`row` +
+   `start` + `value` + `query`) at every nesting level, bounded at 5. Column
+   *names* are checked for presence, not against the query's result set — a
+   query is opaque to the validator, so a misspelt column degrades to an empty
+   lane at render, as for every other kind.
+
 Errors render as an inline error tile inside the cell; one failed widget never
-kills the dashboard (per editor doc §11).
+kills the dashboard (per editor doc §11). A timeline **sub-query** (card /
+expand) failure is narrower still: it renders a muted inline note in the hover
+card or the sub-lane slot, leaving the tile itself intact.
 
 ---
 
