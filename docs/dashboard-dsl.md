@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.19.0                                             │
+  │  Contract version : 0.20.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.19.0 · Draft · `dsl_version: "0.19"`**
+**Contract version 0.20.0 · Draft · `dsl_version: "0.20"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -79,7 +79,7 @@ The query substrate (L1 Frame + L2 templating) is **shipped**. The renderer
 (`app/widgets/dashboard.go` + `dsl_template.go`, `dsl_dialect.go`, `dsl_frame.go`)
 resolves the Frame, expands the macro FuncMap per dialect, lints the template,
 and executes — picker changes **do** re-window YAML-backed queries. Implemented:
-all §6.2 macros (`from`/`to`/`timeFilter`/`anchor`/`interval`/`timeGroup`,
+all §6.2 macros (`from`/`to`/`timeFilter`/`spanFilter`/`anchor`/`interval`/`timeGroup`,
 `var`/`filter`/`values`, `search`), the §5 frame modes, the control-flow lint
 (§6.1), load-time `Validate` (§9, `infra/dashboard/validate.go`), the catalog
 binding modes incl. `catalog: all` (§4.5), named heatmap axes (§8.3), and
@@ -158,6 +158,7 @@ Runtime compatibility rule **(planned)**:
 | 0.18.0 | 2026-08-11 | Additive (timeline widget, S-2160): new widget `kind: timeline` — one query → Gantt lanes, one lane per `row` value, a true bar per result row spanning `start`→`end` on a continuous time axis, colored by a **canonical status vocabulary** (`ok` / `warn` / `fail` / `running` / `queued` / `cancelled`; the QUERY maps raw system statuses, exactly as for the heatmap). New fields `start` / `end` / `key` (columns, by name) and the blocks `card:` (a declared hover-detail query) + `expand:` (a full nested sub-lane axis + query, itself nestable); reuses `row` / `value` / `limit` / `drilldown`. Two new macros, bound ONLY inside those sub-queries: `{{ key }}` (the hovered bar's `key` value) and `{{ row }}` (the expanded lane's key), both expanding to sanitized SQL literals. A NULL `end` means in-flight (the bar runs to now and keeps its status color); `key` is required exactly when a `card:` is declared, at every `expand:` level. The widget is **system-blind** — it knows lanes, bars, statuses and a window, nothing about the system that produced them. (timeline) |
 | 0.18.1 | 2026-08-11 | PATCH (doc-only, no schema change): §6.1 — macros expand BEFORE the SQL is parsed, so a macro named inside a `--` comment is still a call. A comment written to explain `{{ filter }}` is an argument-less invocation of it and fails to render (found while authoring the first `timeline` consumer, S-2162). Write the macro's name, not its call. No behaviour change. (macro-in-comment) |
 | 0.19.0 | 2026-08-11 | Time-axis labels follow the resolved unit (S-2163). A `type: time` axis now labels by RESOLUTION rather than one fixed stamp: clock times (`21:00`) inside a single calendar day, day-anchored (`… 23:00 08-11 01:00 …`) across a window that crosses midnight, calendar units unchanged; cell tooltips still carry the full `01-02 15:04` stamp. Tick thinning past ~16 columns now prefers natural boundaries (day starts, then top-of-hour / midnight / Monday-1st, then a positional fill) instead of every Nth column. **Breaking-shaped, under MAJOR 0 (§2): `unit: auto` + `format:` is now a register-time ERROR** — auto resolves a width that changes with the window and one fixed layout cannot follow it (this combination produced the repeated-date axis). No shipped document combined the two; explicit units keep honouring `format:`. (time-axis-labels) |
+| 0.20.0 | 2026-08-11 | Additive (S-2171): new time macro **`{{ spanFilter "start" "end" }}`** — the INTERVAL sibling of `timeFilter`, selecting rows whose span OVERLAPS the frame (`start < <to> AND (end IS NULL OR end >= <from>)`; `TRUE` when unbounded, and a half-bounded frame drops only the test it cannot make). A NULL end means STILL RUNNING and overlaps every window after its start. Rule of thumb: window on an INSTANT for event tables, on the INTERVAL for span tables — a `kind: timeline` over `timeFilter(start)` loses every run that outlives the window edge, which is how it was found (zoom inside a four-hour run → "no runs in this range" while the run fills the screen). Additive: no existing document changes, `timeFilter` is untouched. (span-filter) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -405,7 +406,8 @@ The *names* are the contract; the *expansions* are dialect-local.
 | Macro | Intent | SQL expansion | Metrics expansion |
 |---|---|---|---|
 | `{{ from }}` / `{{ to }}` | Frame bounds as a literal | `TIMESTAMP '2026-04-28 00:00:00'` | RFC3339 / unix (rarely used in-string) |
-| `{{ timeFilter "col" }}` | Restrict to the frame | `col >= <from> AND col < <to>` (or `TRUE` if unbounded) | *no-op* (`TRUE`); frame rides `opts` |
+| `{{ timeFilter "col" }}` | Restrict to the frame — rows whose **instant** is in it | `col >= <from> AND col < <to>` (or `TRUE` if unbounded) | *no-op* (`TRUE`); frame rides `opts` |
+| `{{ spanFilter "start" "end" }}` | Restrict to the frame — rows whose **interval** overlaps it | `start < <to> AND (end IS NULL OR end >= <from>)` (or `TRUE` if unbounded) | n/a |
 | `{{ anchor "rel" "col" }}` | The as-of snapshot timestamp | `(SELECT MAX(col) FROM rel WHERE col >= <from> AND col < <to>)` | instant-at-`to` semantics |
 | `{{ interval }}` | Bucket width | `INTERVAL '1 day'` | step (`1d`) |
 | `{{ timeGroup "col" }}` | Bucketing expression | `time_bucket(INTERVAL '1 day', col)` (DuckDB) / `date_bin(…)` (PG) | n/a |
@@ -422,6 +424,32 @@ The *names* are the contract; the *expansions* are dialect-local.
 `{{ filter }}` is the workhorse: the **same SQL** works whether the variable is
 single, multi, or all-selected — flipping `multi: true` switches `=` → `IN`
 without touching the query.
+
+#### Instants vs intervals — pick the right window macro (v0.20.0)
+
+**Window on an INSTANT for event tables, on the INTERVAL for span tables.** A row
+that carries one timestamp (a scrape, a login, a recorded KPI) is an event, and
+`{{ timeFilter "col" }}` is right for it. A row that carries a start *and* an end
+(a pipeline run, an activity, a job) is an interval, and asking "did it START in
+the window" is not the same question as "is it in view".
+
+**A timeline over `timeFilter(start)` loses every run that outlives the window
+edge.** Zoom into the middle of a four-hour run and no run started inside the
+window, so nothing comes back and the panel says "no runs in this range" — while
+the run being looked at spans the entire screen. Every in-flight run hits this
+the moment the window moves past its start. Use `{{ spanFilter "start" "end" }}`
+for anything a `kind: timeline` draws, and for the CTE that selects which lanes
+to show — a run whose middle is on screen must still earn its lane.
+
+`spanFilter` treats a **NULL end as still-running**, so an unfinished row
+overlaps every window after its start rather than vanishing into SQL's
+three-valued logic. It is half-open at the right (`start < to`) and closed at the
+left (`end >= from`): a row ending exactly as the window opens overlaps it, and a
+row starting exactly as the window closes belongs to the next one.
+
+Widgets that draw spans clamp a straddling row to the window edges, so an
+overlapping row renders as a bar that runs off the side rather than a
+mispositioned one.
 
 **Search macro** — resolves against the polished-table search box (§8.x):
 
@@ -985,6 +1013,12 @@ The widget is **system-blind**: it knows lanes, bars, statuses and a window.
 Mapping a system's raw statuses onto the canonical vocabulary is the **query's**
 job, exactly as for the heatmap — which is what lets the same widget serve ADF
 runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
+
+> **Window the query with `{{ spanFilter "start" "end" }}`, not
+> `{{ timeFilter "start" }}`** (§6.2, v0.20.0). A bar is an interval: filtering on
+> the start alone drops every row that began before the window, so zooming inside
+> a long run — or past the start of an in-flight one — empties a panel that should
+> be showing exactly that run. This applies to the lane-selection CTE too.
 
 ```yaml
 - id: run-timeline
