@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.20.0                                             │
+  │  Contract version : 0.21.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.20.0 · Draft · `dsl_version: "0.20"`**
+**Contract version 0.21.0 · Draft · `dsl_version: "0.21"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -79,8 +79,8 @@ The query substrate (L1 Frame + L2 templating) is **shipped**. The renderer
 (`app/widgets/dashboard.go` + `dsl_template.go`, `dsl_dialect.go`, `dsl_frame.go`)
 resolves the Frame, expands the macro FuncMap per dialect, lints the template,
 and executes — picker changes **do** re-window YAML-backed queries. Implemented:
-all §6.2 macros (`from`/`to`/`timeFilter`/`spanFilter`/`anchor`/`interval`/`timeGroup`,
-`var`/`filter`/`values`, `search`), the §5 frame modes, the control-flow lint
+all §6.2 macros (`from`/`to`/`timeFilter`/`spanFilter`/`anchor`/`interval`/
+`bucket`/`worstStatus`, `var`/`filter`/`values`, `search`, `key`/`row`), the §5 frame modes, the control-flow lint
 (§6.1), load-time `Validate` (§9, `infra/dashboard/validate.go`), the catalog
 binding modes incl. `catalog: all` (§4.5), named heatmap axes (§8.3), and
 drill-down (§8.2).
@@ -159,6 +159,7 @@ Runtime compatibility rule **(planned)**:
 | 0.18.1 | 2026-08-11 | PATCH (doc-only, no schema change): §6.1 — macros expand BEFORE the SQL is parsed, so a macro named inside a `--` comment is still a call. A comment written to explain `{{ filter }}` is an argument-less invocation of it and fails to render (found while authoring the first `timeline` consumer, S-2162). Write the macro's name, not its call. No behaviour change. (macro-in-comment) |
 | 0.19.0 | 2026-08-11 | Time-axis labels follow the resolved unit (S-2163). A `type: time` axis now labels by RESOLUTION rather than one fixed stamp: clock times (`21:00`) inside a single calendar day, day-anchored (`… 23:00 08-11 01:00 …`) across a window that crosses midnight, calendar units unchanged; cell tooltips still carry the full `01-02 15:04` stamp. Tick thinning past ~16 columns now prefers natural boundaries (day starts, then top-of-hour / midnight / Monday-1st, then a positional fill) instead of every Nth column. **Breaking-shaped, under MAJOR 0 (§2): `unit: auto` + `format:` is now a register-time ERROR** — auto resolves a width that changes with the window and one fixed layout cannot follow it (this combination produced the repeated-date axis). No shipped document combined the two; explicit units keep honouring `format:`. (time-axis-labels) |
 | 0.20.0 | 2026-08-11 | Additive (S-2171): new time macro **`{{ spanFilter "start" "end" }}`** — the INTERVAL sibling of `timeFilter`, selecting rows whose span OVERLAPS the frame (`start < <to> AND (end IS NULL OR end >= <from>)`; `TRUE` when unbounded, and a half-bounded frame drops only the test it cannot make). A NULL end means STILL RUNNING and overlaps every window after its start. Rule of thumb: window on an INSTANT for event tables, on the INTERVAL for span tables — a `kind: timeline` over `timeFilter(start)` loses every run that outlives the window edge, which is how it was found (zoom inside a four-hour run → "no runs in this range" while the run fills the screen). Additive: no existing document changes, `timeFilter` is untouched. (span-filter) |
+| 0.21.0 | 2026-08-11 | Additive (S-2164): fold a widget's own collapse into SQL. Two macros — **`{{ bucket "col" }}`**, the resolution the WIDGET resolved to for the current window (a heatmap's column-axis unit, a timeline's density grid), and **`{{ worstStatus "col" }}`**, the widget's own severity ranking as an aggregate — so `GROUP BY {{ bucket "at" }}, <lane>` produces the marks that were going to be drawn instead of shipping every row to draw them (measured on a 30-day real estate: a run history 155,735 → 17,239 rows, an activity wall 414,792 → 7,002). The bucket is a macro rather than something you write precisely because it follows the picker window; a constant would break every sub-daily preset (0.17.0). Both are opt-in and lossless — the widget still runs its own fold and stays the authority on the wall — and both are a register-time ERROR on a widget that has no fold, rather than a grouping invented on the spot. Additive: new widget key **`count:`** on `kind: timeline` (and on `expand:`), naming how many bars a folded row stands for so a merged segment's hover stays honest; absent → one bar per row, so no existing document changes. **Correction, not a change:** `{{ timeGroup "col" }}` has been listed in §6.2 and §1.1 since 0.1.0 and was never implemented — writing it has always been a hard render error. `bucket` is what it was reaching for, done resolution-aware; the `timeGroup` rows are removed rather than deprecated, since nothing could have been written against them. (fold-pushdown) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -410,7 +411,8 @@ The *names* are the contract; the *expansions* are dialect-local.
 | `{{ spanFilter "start" "end" }}` | Restrict to the frame — rows whose **interval** overlaps it | `start < <to> AND (end IS NULL OR end >= <from>)` (or `TRUE` if unbounded) | n/a |
 | `{{ anchor "rel" "col" }}` | The as-of snapshot timestamp | `(SELECT MAX(col) FROM rel WHERE col >= <from> AND col < <to>)` | instant-at-`to` semantics |
 | `{{ interval }}` | Bucket width | `INTERVAL '1 day'` | step (`1d`) |
-| `{{ timeGroup "col" }}` | Bucketing expression | `time_bucket(INTERVAL '1 day', col)` (DuckDB) / `date_bin(…)` (PG) | n/a |
+| `{{ bucket "col" }}` | Group on **the widget's own resolved bucket** | `time_bucket(INTERVAL '14400 seconds', col)` / `date_trunc('day', col)` | n/a |
+| `{{ worstStatus "col" }}` | Fold a group to its worst canonical status | `arg_max(col, CASE UPPER(TRIM(col)) WHEN 'FAIL' THEN 5 … END)` | n/a |
 | `{{ rate_interval }}` | Range-selector width | n/a | `[5m]` window |
 
 **Variable macros** — resolve against declared variables (§7):
@@ -451,6 +453,52 @@ Widgets that draw spans clamp a straddling row to the window edges, so an
 overlapping row renders as a bar that runs off the side rather than a
 mispositioned one.
 
+#### Folding in SQL — `bucket` / `worstStatus` (v0.21.0)
+
+A `kind: heatmap` and a `kind: timeline` both **collapse** their result set before
+they draw it: the heatmap folds every row landing in a (bucket, lane) cell to the
+worst status, the timeline merges same-lane bars that start within a few pixels
+of each other. The drawn marks are therefore bounded — but the ROWS are not, and
+the platform materialises every one of them before a widget sees it. A 30-day run
+history shipped 155,735 rows to draw 5,028 bars, and paid it again on every window
+and variable change.
+
+These two macros let the **query** do that fold, so the rows never leave the
+engine:
+
+```sql
+SELECT {{ bucket "at_ts" }} AS t,
+       activity_name,
+       {{ worstStatus "grade" }} AS status
+FROM graded
+GROUP BY 1, 2
+```
+
+- **`{{ bucket "col" }}` expands to the resolution the WIDGET resolved to for the
+  current window** — a heatmap's resolved column-axis unit (§8.3), a timeline's
+  density grid (§8.5). That is why it is a macro and not something you write:
+  the resolution follows the picker (a 24 h selection buckets far finer than a
+  30-day one), so a constant in the query would break every sub-daily preset.
+- **`{{ worstStatus "col" }}` expands to the widget's OWN severity ranking**
+  (`fail > warn > unknown > running/info > ok/queued/cancelled`, §8.5) as an
+  aggregate. Use it rather than hand-writing a `CASE`: a second copy of the
+  canonical vocabulary in your query is free to drift from the widget's, and a
+  folded wall would then disagree with an unfolded one for a reason no reader
+  could see.
+- **Both are opt-in and lossless.** A query naming neither is unaffected, and the
+  widget still runs its own fold afterwards either way — re-bucketing an
+  already-bucketed timestamp is idempotent, so the WIDGET remains the authority
+  on what the wall looks like. A heatmap's fold is exact (the SQL grid *is* the
+  axis's grid); a timeline's is close (see §8.5, and declare `count:`).
+- **Outside a folding widget they are an error, not a silent expansion.** A
+  metric card, a table, or a heatmap whose column axis is `type: category` has no
+  resolved bucket, and so does a timeline with no bounded window. `{{ bucket }}`
+  says so at register time rather than grouping on something invented.
+- **Both take a BARE column identifier**, like every other column-taking macro
+  (§6.4). Alias the value you are folding to something other than the output
+  column name — `{{ bucket "at_ts" }} AS t` reads cleanly, `{{ bucket "t" }} AS t`
+  reads as a self-reference to the engine.
+
 **Search macro** — resolves against the polished-table search box (§8.x):
 
 | Macro | Intent | Term set | Term empty / no columns |
@@ -487,11 +535,12 @@ card obeys the picker window without the author repeating it.
 
 ### 6.3 Reserved names
 
-The macro names above (including `{{ search }}`, `{{ key }}` and `{{ row }}`), plus the document keys
+The macro names above (including `{{ search }}`, `{{ key }}`, `{{ row }}`,
+`{{ bucket }}` and `{{ worstStatus }}`), plus the document keys
 `dsl_version`, `id`, `title`, `header`, `default_source`, `variables`, `rows`,
 and the widget keys `kind`, `span`, `source`, `frame`, `lookback`, `refresh`,
 `searchable`, `search_columns`, `page_size`, `flat`, `drilldown`, `col`, `row`,
-`value`, `start`, `end`, `key`, `card`, `expand`. New names enter via MINOR bumps.
+`value`, `start`, `end`, `key`, `count`, `card`, `expand`. New names enter via MINOR bumps.
 
 ### 6.4 Safety
 
@@ -935,6 +984,13 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
   4 h, 30 d → a day, a year → weeks. The ladder is 1m/5m/15m/30m/1h/2h/4h/
   6h/12h then day/week/month — the narrowest width keeping the window at or
   under ~44 columns. Without a frame, `auto` falls back to `day`.
+  **Wide windows: fold in SQL with `{{ bucket }}` (0.21.0).** The wall is ~44
+  columns however long the window is, but a query emitting one row per event
+  ships every one of them to draw them. `GROUP BY {{ bucket "col" }}, <row>` with
+  `{{ worstStatus }}` folds to one row per CELL instead, on the axis's own grid —
+  so the result is identical, seeding, labels and thinning included, and the fold
+  is **exact** rather than approximate (§6.2). Measured on a real 30-day estate,
+  an activity wall went from 414,792 rows to 7,002.
   **`auto` may not be combined with `format:` (0.19.0)** — the two contradict:
   auto resolves a width that CHANGES with the window and the labels follow it,
   while `format:` pins one layout for every width. Pinning `format: "01-02"`
@@ -1029,6 +1085,7 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
   end: end_time             # bar end; NULL → in-flight (bar runs to now, status color kept)
   value: status             # canonical status — map raw values in SQL
   key: external_run_id      # per-bar identity; the {{ key }} the card query receives
+  count: runs               # optional — bars this row already stands for (see "folding in SQL")
   frame: window
   limit: 200                # optional lane cap; overflow reported in the tile foot
   drilldown: { target: adf.pipeline, params: { pipeline: "{row}" } }
@@ -1084,6 +1141,26 @@ widget shows what the query gave it. Severity for "worst of a merged segment" is
   merged segment spans from its earliest start to its latest end, carries no
   `key` (N runs have no single identity) and therefore no card query. A very
   short run is floored at a visible minimum width rather than vanishing.
+- **Folding the density budget into SQL (0.21.0).** The merged marks are bounded;
+  the rows behind them are not. `GROUP BY {{ bucket "start_time" }}, <lane>` folds
+  a lane's runs onto the widget's own density grid before they leave the engine —
+  measured, a 30-day run history went from 155,735 rows to 17,239 while drawing
+  4,773 of the 5,028 marks it drew before. Unlike the heatmap's, this fold is
+  **approximate**: the widget merges greedily and a grid can only approximate
+  that, so `{{ bucket }}` deliberately resolves to a grid well under the merge
+  threshold and leaves the widget to finish the job. Three things your `GROUP BY`
+  must preserve, because the widget cannot recover them:
+  - **`count:`** — how many bars the row stands for. Without it a segment holding
+    twelve runs hovers as "1 run". Counts SUM through the widget's own merge, and
+    a mark standing for more than one drops its `key` and its card exactly as a
+    widget-merged segment does. Absent / NULL / `< 1` reads as **1**, so a query
+    that does not fold is unchanged.
+  - **In-flight.** `MAX(end)` ignores NULLs, so a bucket holding a finished run
+    and a running one comes back finished and the bar stops dead mid-flight. Emit
+    NULL for the group when any member is unfinished.
+  - **Identity.** Emit the `key` only when the group holds exactly one row; a
+    group of several has no single identity, and saying so with a NULL is what
+    keeps the hover card honest.
 - **Vertical budget.** Lanes have a minimum height and the widget body a maximum;
   many lanes scroll (the time axis stays visible) rather than shrinking lanes to
   fit. `limit` caps the lane count and any drop is reported, never silent.
@@ -1305,8 +1382,10 @@ not yet built — there is no `ApplyFrame` method today.
 
 ## 12. Open questions (tracked, not yet decided)
 
-- **`timeGroup` flavor coverage** — confirmed for DuckDB (`time_bucket`); Postgres
-  (`date_bin`) needs a decision on the minimum-version baseline.
+- **`{{ bucket }}` flavor coverage** — shipped for the DuckDB family
+  (`time_bucket` for a width, `date_trunc` for a calendar unit). Postgres
+  (`date_bin`) needs a decision on the minimum-version baseline. (This question
+  outlived `timeGroup`, the never-implemented macro `bucket` replaced in 0.21.0.)
 - **`interval` units** — fixed (`1 day`) vs. auto (span ÷ width, Grafana-style).
   v0.1 specifies resolution-derived; auto-interval may arrive in a MINOR bump.
 - **Sub-daily `anchor`** — `anchor` semantics on hourly resolution (latest hour
