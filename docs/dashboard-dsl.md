@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.21.0                                             │
+  │  Contract version : 0.21.1                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.21.0 · Draft · `dsl_version: "0.21"`**
+**Contract version 0.21.1 · Draft · `dsl_version: "0.21"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -160,6 +160,7 @@ Runtime compatibility rule **(planned)**:
 | 0.19.0 | 2026-08-11 | Time-axis labels follow the resolved unit (S-2163). A `type: time` axis now labels by RESOLUTION rather than one fixed stamp: clock times (`21:00`) inside a single calendar day, day-anchored (`… 23:00 08-11 01:00 …`) across a window that crosses midnight, calendar units unchanged; cell tooltips still carry the full `01-02 15:04` stamp. Tick thinning past ~16 columns now prefers natural boundaries (day starts, then top-of-hour / midnight / Monday-1st, then a positional fill) instead of every Nth column. **Breaking-shaped, under MAJOR 0 (§2): `unit: auto` + `format:` is now a register-time ERROR** — auto resolves a width that changes with the window and one fixed layout cannot follow it (this combination produced the repeated-date axis). No shipped document combined the two; explicit units keep honouring `format:`. (time-axis-labels) |
 | 0.20.0 | 2026-08-11 | Additive (S-2171): new time macro **`{{ spanFilter "start" "end" }}`** — the INTERVAL sibling of `timeFilter`, selecting rows whose span OVERLAPS the frame (`start < <to> AND (end IS NULL OR end >= <from>)`; `TRUE` when unbounded, and a half-bounded frame drops only the test it cannot make). A NULL end means STILL RUNNING and overlaps every window after its start. Rule of thumb: window on an INSTANT for event tables, on the INTERVAL for span tables — a `kind: timeline` over `timeFilter(start)` loses every run that outlives the window edge, which is how it was found (zoom inside a four-hour run → "no runs in this range" while the run fills the screen). Additive: no existing document changes, `timeFilter` is untouched. (span-filter) |
 | 0.21.0 | 2026-08-11 | Additive (S-2164): fold a widget's own collapse into SQL. Two macros — **`{{ bucket "col" }}`**, the resolution the WIDGET resolved to for the current window (a heatmap's column-axis unit, a timeline's density grid), and **`{{ worstStatus "col" }}`**, the widget's own severity ranking as an aggregate — so `GROUP BY {{ bucket "at" }}, <lane>` produces the marks that were going to be drawn instead of shipping every row to draw them (measured on a 30-day real estate: a run history 155,735 → 17,239 rows, an activity wall 414,792 → 7,002). The bucket is a macro rather than something you write precisely because it follows the picker window; a constant would break every sub-daily preset (0.17.0). Both are opt-in — the widget still runs its own fold and stays the authority on the wall, exactly for a heatmap and closely for a timeline (§8.5) — and both are a register-time ERROR on a widget that has no fold, rather than a grouping invented on the spot. Additive: new widget key **`count:`** on `kind: timeline` (and on `expand:`), naming how many bars a folded row stands for so a merged segment's hover stays honest; absent → one bar per row, so no existing document changes. **Correction, not a change:** `{{ timeGroup "col" }}` has been listed in §6.2 and §1.1 since 0.1.0 and was never implemented — writing it has always been a hard render error. `bucket` is what it was reaching for, done resolution-aware; the `timeGroup` rows are removed rather than deprecated, since nothing could have been written against them. (fold-pushdown) |
+| 0.21.1 | 2026-08-11 | PATCH (S-2176): what an ABSENT status means, stated once. NULL, empty and whitespace in a `value` column all mean "the row exists and nothing graded it", and all fold as **`unknown`** — above `ok`/`queued`/`cancelled`/`running`, below `warn` and `fail`. So a merged timeline segment of eleven `ok` runs and one ungraded one reads `unknown`, not `ok`; one holding a `fail` still reads `fail`. This is the severity order's whole point (an unknown must be visible and must never mask a failure) and it is what the heatmap's own order already said since 0.15.0; the timeline previously let an absent status lose to everything, and `{{ worstStatus }}` previously let it lose by construction, because `arg_max` drops a row whose value argument is NULL BEFORE ranking it. Both now normalise identically, so a folded query and an unfolded one agree — a bug-fix in expansion restoring intended behaviour, hence PATCH: no schema change, no field, no macro, and no document stops working. Also states the distinction a heatmap must never blur (§8.3): a bucket NO row landed in renders EMPTY, a bucket that received ungraded rows renders `unknown` — activity nobody graded is not the same as no activity. Grade in SQL with a total `CASE ... ELSE` if you want an ungraded row to read as something specific. (absent-status) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -484,7 +485,10 @@ GROUP BY 1, 2
   aggregate. Use it rather than hand-writing a `CASE`: a second copy of the
   canonical vocabulary in your query is free to drift from the widget's, and a
   folded wall would then disagree with an unfolded one for a reason no reader
-  could see.
+  could see. It also **normalises an absent status exactly as the widget does**
+  (NULL / blank / whitespace → `unknown`, §8.5) — which a hand-written `arg_max`
+  will not, because `arg_max` silently drops a row whose value argument is NULL
+  before it ranks anything, so an ungraded row would lose every fold it entered.
 - **Both are opt-in.** A query naming neither is unaffected, and the widget still
   runs its own fold afterwards either way — re-bucketing an already-bucketed
   timestamp is idempotent, so the WIDGET remains the authority on what the wall
@@ -980,6 +984,14 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
   as an **empty cell** rather than a silently missing column. (A time ROW
   axis, and any axis without a resolvable frame, stays data-derived as
   before.)
+- **An empty cell and an ungraded cell are different things (0.21.1).** "No row
+  landed in this bucket" renders **empty**. A bucket that DID receive rows whose
+  `value` was NULL or blank renders `unknown` — the same neutral colour, but a
+  real cell with a real hover, and it folds at the `unknown` severity (above
+  `ok`, below `warn`; see §8.5). The distinction is deliberate and it is the one
+  thing the wall must not blur: a bucket where something happened that nobody
+  graded is not the same as a bucket where nothing happened, and rendering the
+  first as the second would hide activity rather than merely fail to colour it.
 - **`unit: auto` (0.15.0)** derives the bucket width from the window span,
   aiming at ~40 columns whatever range is picked: 24 h → 1 h buckets, 7 d →
   4 h, 30 d → a day, a year → weeks. The ladder is 1m/5m/15m/30m/1h/2h/4h/
@@ -1112,7 +1124,20 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
 THEN 'running' … END` — the heatmap precedent. Unrecognised values still render
 (with the neutral color and their own legend entry) rather than being hidden: the
 widget shows what the query gave it. Severity for "worst of a merged segment" is
-`fail > warn > running > ok/queued/cancelled`.
+`fail > warn > unknown > running/info > ok/queued/cancelled`.
+
+**An absent status is `unknown`, and `unknown` outranks `ok` (0.21.1).** NULL,
+empty and whitespace all mean the same thing — the row exists, and nothing graded
+it — and they fold as `unknown`: above `ok`, `queued`, `cancelled` and `running`,
+below `warn` and `fail`. So a merged segment holding eleven `ok` runs and one
+ungraded one reads `unknown` rather than `ok`, and one holding a `fail` still
+reads `fail`. That follows the rule the whole severity order exists for: an
+unknown must be **visible, and must never be able to mask a failure**.
+
+If you want an ungraded row to read as something specific, grade it in SQL — a
+`CASE` with a total `ELSE` is the contract (`ELSE 'warn'` is what the ADF
+timeline uses, precisely so a status Azure adds later stays visible). Leaving
+NULLs to the widget is not a way of saying "ignore these".
 
 - **`row` is categorical by construction.** Declaring `type: time` on it is a
   validation error — the continuous time dimension is the bar track.
