@@ -2,12 +2,12 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.21.1                                             │
+  │  Contract version : 0.21.2                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
   │                      the LLM; third parties write against this.        │
-  │  Last updated      : 2026-08-11                                        │
+  │  Last updated      : 2026-08-12                                        │
   │  Owner ticket      : S-1140 (design) / S-1524 (this correctness pass)  │
   │  Implements        : shipped — frame, macros, dialect (see §1.1)       │
   │  Supersedes        : the hand-rolled window SQL in                     │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.21.1 · Draft · `dsl_version: "0.21"`**
+**Contract version 0.21.2 · Draft · `dsl_version: "0.21"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -161,6 +161,7 @@ Runtime compatibility rule **(planned)**:
 | 0.20.0 | 2026-08-11 | Additive (S-2171): new time macro **`{{ spanFilter "start" "end" }}`** — the INTERVAL sibling of `timeFilter`, selecting rows whose span OVERLAPS the frame (`start < <to> AND (end IS NULL OR end >= <from>)`; `TRUE` when unbounded, and a half-bounded frame drops only the test it cannot make). A NULL end means STILL RUNNING and overlaps every window after its start. Rule of thumb: window on an INSTANT for event tables, on the INTERVAL for span tables — a `kind: timeline` over `timeFilter(start)` loses every run that outlives the window edge, which is how it was found (zoom inside a four-hour run → "no runs in this range" while the run fills the screen). Additive: no existing document changes, `timeFilter` is untouched. (span-filter) |
 | 0.21.0 | 2026-08-11 | Additive (S-2164): fold a widget's own collapse into SQL. Two macros — **`{{ bucket "col" }}`**, the resolution the WIDGET resolved to for the current window (a heatmap's column-axis unit, a timeline's density grid), and **`{{ worstStatus "col" }}`**, the widget's own severity ranking as an aggregate — so `GROUP BY {{ bucket "at" }}, <lane>` produces the marks that were going to be drawn instead of shipping every row to draw them (measured on a 30-day real estate: a run history 155,735 → 17,239 rows, an activity wall 414,792 → 7,002). The bucket is a macro rather than something you write precisely because it follows the picker window; a constant would break every sub-daily preset (0.17.0). Both are opt-in — the widget still runs its own fold and stays the authority on the wall, exactly for a heatmap and closely for a timeline (§8.5) — and both are a register-time ERROR on a widget that has no fold, rather than a grouping invented on the spot. Additive: new widget key **`count:`** on `kind: timeline` (and on `expand:`), naming how many bars a folded row stands for so a merged segment's hover stays honest; absent → one bar per row, so no existing document changes. **Correction, not a change:** `{{ timeGroup "col" }}` has been listed in §6.2 and §1.1 since 0.1.0 and was never implemented — writing it has always been a hard render error. `bucket` is what it was reaching for, done resolution-aware; the `timeGroup` rows are removed rather than deprecated, since nothing could have been written against them. (fold-pushdown) |
 | 0.21.1 | 2026-08-11 | PATCH (S-2176): what an ABSENT status means, stated once. NULL, empty and whitespace in a `value` column all mean "the row exists and nothing graded it", and all fold as **`unknown`** — above `ok`/`queued`/`cancelled`/`running`, below `warn` and `fail`. So a merged timeline segment of eleven `ok` runs and one ungraded one reads `unknown`, not `ok`; one holding a `fail` still reads `fail`. This is the severity order's whole point (an unknown must be visible and must never mask a failure) and it is what the heatmap's own order already said since 0.15.0; the timeline previously let an absent status lose to everything, and `{{ worstStatus }}` previously let it lose by construction, because `arg_max` drops a row whose value argument is NULL BEFORE ranking it. Both now normalise identically, so a folded query and an unfolded one agree — a bug-fix in expansion restoring intended behaviour, hence PATCH: no schema change, no field, no macro, and no document stops working. Also states the distinction a heatmap must never blur (§8.3): a bucket NO row landed in renders EMPTY, a bucket that received ungraded rows renders `unknown` — activity nobody graded is not the same as no activity. Grade in SQL with a total `CASE ... ELSE` if you want an ungraded row to read as something specific. (absent-status) |
+| 0.21.2 | 2026-08-12 | PATCH (doc-only, no schema change): two §8.5 corrections and one stated constraint (S-2169). **The example was wrong about windowing.** Every windowing slot in the `kind: timeline` example used `{{ timeFilter }}` — the widget's own `source.query` AND the `expand:` sub-query — five lines under the 0.20.0 warning that a timeline windowed on an instant loses every bar that outlives the window edge. Both are now `{{ spanFilter }}`. Every in-tree consumer was already correct, so this was purely an external-surface defect, hitting exactly the readers the document exists for. **Nesting is now stated, because it constrains what a second `expand:` level can mean.** `{{ row }}` binds the IMMEDIATE parent lane and nothing above it — there is no ancestor chain — so each level's lane key (plus the page's variables) must identify its rows on its own; a level keyed on a value that is unique only within its grandparent returns rows that belong to something else, aligned on the right time axis and silently wrong. Also states that a chevron is offered per LEVEL, not per lane: a lane whose sub-query returns nothing still shows one. No field, no macro, no schema change, and no existing document stops working. (nested-expand) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -1114,9 +1115,10 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
     key: activity_run_id
     query: |
       SELECT … FROM activities a JOIN runs r USING (run_id)
-      WHERE r.run_name = {{ row }} AND {{ timeFilter "activity_start" }}
-    # expand: may nest again — an ExecutePipeline activity opens its child's runs
-  source: { store: ops, query: "SELECT … WHERE {{ timeFilter \"start_time\" }}" }
+      WHERE r.run_name = {{ row }} AND {{ spanFilter "activity_start" "activity_end" }}
+    # expand: may nest again — an ExecutePipeline activity opens its child's runs.
+    # {{ row }} binds the IMMEDIATE parent lane only; see "Nesting" below.
+  source: { store: ops, query: "SELECT … WHERE {{ spanFilter \"start_time\" \"end_time\" }}" }
 ```
 
 **Canonical status vocabulary.** `ok` / `warn` / `fail` / `running` / `queued` /
@@ -1217,6 +1219,35 @@ NULLs to the widget is not a way of saying "ignore these".
   (required iff the widget declares a `card:`) — plus its own `query`, bound to
   the opened lane via `{{ row }}`. Sub-lanes ARE lanes: same bar maths, same window, same
   density budget, same card mechanics. Nesting is bounded (5 levels).
+
+**Nesting: `{{ row }}` is the IMMEDIATE parent lane, and nothing above it
+(0.21.2).** Each `expand:` level is fetched on its own, identified by one lane
+key plus the dashboard's current variables — so a level-2 query receives the
+level-1 lane it was opened from, and the top-level lane that lane sat under is
+**not** available to it. There is no ancestor chain and no `{{ parentRow }}`.
+
+That is a design constraint on what a second level can mean, not a detail:
+
+- **Each level's lane key must identify its rows on its own.** If level 1's lanes
+  are step names and step names are only unique *within* a pipeline, then a
+  level-2 query keyed on a step name matches steps of that name in *every*
+  pipeline. It will return rows, aligned on the right time axis, and be silently
+  wrong.
+- **Page scope counts as identity.** A dashboard already scoped to one entity by
+  a variable (`{{ filter "run_name" "pipeline" }}` on a per-pipeline page) gives
+  the sub-query the context the lane key lacks, which is often what makes a
+  second level expressible on a detail page and not on an estate-wide wall.
+- **When the key is not enough, don't ship the level.** Prefer no chevron to a
+  chevron over rows that belong to something else.
+
+**A chevron is offered per LEVEL, not per lane.** If a level declares an
+`expand:`, *every* lane at that level gets one, including lanes whose sub-query
+returns nothing — opening those shows an inline "no sub-lanes in this window".
+There is no way to declare "this lane has no children"; if most lanes at a level
+are leaves, weigh that against the value of the expansion.
+
+Sub-query failures stay local: a card or expand query that errors renders a muted
+inline note in the hover or lane list, never a failed tile (§9).
 
 **Interactions** (platform-provided, nothing to declare): dragging horizontally
 across a lane zooms the dashboard's time range to the dragged span (the same
