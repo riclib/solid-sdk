@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.18.1                                             │
+  │  Contract version : 0.19.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.18.1 · Draft · `dsl_version: "0.18"`**
+**Contract version 0.19.0 · Draft · `dsl_version: "0.19"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -157,6 +157,7 @@ Runtime compatibility rule **(planned)**:
 | 0.17.0 | 2026-07-19 | Additive (diagram widget, S-1785): new widget `kind: diagram` — one query's rows drawn as a mermaid flowchart, rendered SERVER-SIDE (no chart library, no client JS; the platform's diagram lightbox provides zoom/download). Each row is one EDGE; columns declared by name: `from` / `to` (required — the edge's node labels), optional `edge_label` (annotation on the arrow, e.g. a runs count) and `status` (accents the row's TARGET node: fail/error red, warn amber). Presentation fields: `direction` (LR default, TB/TD/RL/BT) and `limit` (edge cap, default 80 — overflow renders a "+M more edges not drawn" foot note, never silently). Nodes are the distinct labels, ids assigned in first-appearance order — ORDER BY the important edges first; the cap keeps the head. First consumer: solidmon.pipeline's wiring map (triggers → pipeline → children lineage). (diagram) |
 | 0.18.0 | 2026-08-11 | Additive (timeline widget, S-2160): new widget `kind: timeline` — one query → Gantt lanes, one lane per `row` value, a true bar per result row spanning `start`→`end` on a continuous time axis, colored by a **canonical status vocabulary** (`ok` / `warn` / `fail` / `running` / `queued` / `cancelled`; the QUERY maps raw system statuses, exactly as for the heatmap). New fields `start` / `end` / `key` (columns, by name) and the blocks `card:` (a declared hover-detail query) + `expand:` (a full nested sub-lane axis + query, itself nestable); reuses `row` / `value` / `limit` / `drilldown`. Two new macros, bound ONLY inside those sub-queries: `{{ key }}` (the hovered bar's `key` value) and `{{ row }}` (the expanded lane's key), both expanding to sanitized SQL literals. A NULL `end` means in-flight (the bar runs to now and keeps its status color); `key` is required exactly when a `card:` is declared, at every `expand:` level. The widget is **system-blind** — it knows lanes, bars, statuses and a window, nothing about the system that produced them. (timeline) |
 | 0.18.1 | 2026-08-11 | PATCH (doc-only, no schema change): §6.1 — macros expand BEFORE the SQL is parsed, so a macro named inside a `--` comment is still a call. A comment written to explain `{{ filter }}` is an argument-less invocation of it and fails to render (found while authoring the first `timeline` consumer, S-2162). Write the macro's name, not its call. No behaviour change. (macro-in-comment) |
+| 0.19.0 | 2026-08-11 | Time-axis labels follow the resolved unit (S-2163). A `type: time` axis now labels by RESOLUTION rather than one fixed stamp: clock times (`21:00`) inside a single calendar day, day-anchored (`… 23:00 08-11 01:00 …`) across a window that crosses midnight, calendar units unchanged; cell tooltips still carry the full `01-02 15:04` stamp. Tick thinning past ~16 columns now prefers natural boundaries (day starts, then top-of-hour / midnight / Monday-1st, then a positional fill) instead of every Nth column. **Breaking-shaped, under MAJOR 0 (§2): `unit: auto` + `format:` is now a register-time ERROR** — auto resolves a width that changes with the window and one fixed layout cannot follow it (this combination produced the repeated-date axis). No shipped document combined the two; explicit units keep honouring `format:`. (time-axis-labels) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -869,14 +870,31 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
   key and the axis label; axis order follows the query's `ORDER BY` (no lexical
   re-sort).
 - **`type: time`** — the value is parsed and **bucketed** by `unit` (`hour` |
-  `day` | `week` | `month` | `quarter` | `year` | `auto`), labelled via `format`
-  (a Go time layout, e.g. `"01-02"` / `"Jan 2006"`; `quarter` / `week` use a
-  built-in formatter; sub-day buckets default to `"01-02 15:04"`), and sorted
-  chronologically:
+  `day` | `week` | `month` | `quarter` | `year` | `auto`), labelled per the
+  resolved resolution (below), and sorted chronologically:
 
   ```yaml
   col: { field: dt, type: time, unit: day, format: "01-02" }
   ```
+
+- **Labels follow the resolved unit (0.19.0).** The axis prints the smallest
+  unit that still disambiguates, so a label is readable at a glance instead of
+  repeating what never changes:
+
+  | resolved bucket | window | axis reads |
+  |---|---|---|
+  | sub-day | inside one calendar day | `21:00 21:20 21:40 …` (clock only — the date is constant) |
+  | sub-day | crosses midnight | `… 22:00 23:00 08-11 01:00 …` (each day's first bucket carries the date) |
+  | `day` | any | `07-30 07-31 08-01 …` |
+  | `week` / `month` / `quarter` / `year` | any | unchanged (`W02 2026`, `Jan 2026`, `Q1 2026`, `2026`) |
+
+  **Cell titles always carry the full stamp** (`01-02 15:04`) whatever the axis
+  abbreviates to — the hover exists to disambiguate.
+
+- **`format:` (a Go time layout, e.g. `"01-02"` / `"Jan 2006"`) overrides the
+  label layout for an EXPLICIT unit.** `quarter` / `week` always use their
+  built-in formatter (Go has no quarter or ISO-week verb).
+  **`format:` with `unit: auto` is a validation error (0.19.0)** — see below.
 
 - **A time COLUMN axis is frame-driven (0.15.0)**: its buckets are generated
   from the resolved time window, pre-seeded across the whole span — the grid
@@ -889,6 +907,11 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
   4 h, 30 d → a day, a year → weeks. The ladder is 1m/5m/15m/30m/1h/2h/4h/
   6h/12h then day/week/month — the narrowest width keeping the window at or
   under ~44 columns. Without a frame, `auto` falls back to `day`.
+  **`auto` may not be combined with `format:` (0.19.0)** — the two contradict:
+  auto resolves a width that CHANGES with the window and the labels follow it,
+  while `format:` pins one layout for every width. Pinning `format: "01-02"`
+  under auto is what produced an axis of a dozen identical dates. Declare an
+  explicit unit if you need to name a layout. Rejected at register, loudly.
 - **Duplicate cells keep the WORST status (0.15.0)** — severity order
   `fail/error/critical/high` > `warn/warning/elevated` > *unknown* >
   `inconclusive/info` > `pass/ok/healthy`. This replaces the previously
@@ -896,10 +919,17 @@ A `kind: heatmap` declares its three axes by **name**, not by column position:
   per source point (e.g. per hourly KPI round) and let the widget fold them —
   the wall exists to surface the bad hour, and a later ok must not paint over
   it. Pre-aggregating in SQL remains valid.
-- Rendering notes: past ~16 columns the axis labels the first bucket of every
-  ~12th column (cell tooltips keep the exact bucket); the heatmap is a
-  server-rendered grid and refreshes wholesale on window change (it is exempt
-  from the chart-canvas morph preservation that protects uPlot widgets).
+- **Tick thinning prefers natural boundaries (0.19.0).** Past ~16 columns the
+  axis shows roughly 12 labels, and WHICH 12 is chosen by rank, not by
+  arithmetic: day boundaries first (they are the only labels that say which day
+  a column belongs to), then the resolution's round instants (top of the hour
+  for sub-hour buckets, midnight for hour-and-up, Monday / the 1st for day
+  buckets), then a positional fill for whatever gaps remain. A uniform minimum
+  spacing applies to all three, so labels never collide — ranking decides which
+  survive, spacing decides how many. Cell tooltips keep the exact bucket.
+- Rendering notes: the heatmap is a server-rendered grid and refreshes wholesale
+  on window change (it is exempt from the chart-canvas morph preservation that
+  protects uPlot widgets).
 
 > **Breaking change (0.12.0).** This replaces the prior positional contract
 > (`cols[0]` parsed as a date and formatted `MM-DD`, `cols[1]` = row label,
