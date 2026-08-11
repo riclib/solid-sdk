@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.18.0                                             │
+  │  Contract version : 0.18.1                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.18.0 · Draft · `dsl_version: "0.18"`**
+**Contract version 0.18.1 · Draft · `dsl_version: "0.18"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -156,6 +156,7 @@ Runtime compatibility rule **(planned)**:
 | 0.16.0 | 2026-07-19 | Additive (nav groups, S-1771): new optional dashboard-level fields `group` (string) + `nav_order` (int). Dashboards sharing a `group` collapse into ONE workspace-nav item rendered as a dropdown of members; `nav_order` positions a dashboard in the nav and within its group (lower = first; unset keeps announce-order). Presentation only: `?page=<id>` deep links, drill-downs, and widget identity are untouched — the dropdown is chrome, not routing. Group display text is owned by the document; the platform never infers hierarchy from page-id segments. (nav-groups) |
 | 0.17.0 | 2026-07-19 | Additive (diagram widget, S-1785): new widget `kind: diagram` — one query's rows drawn as a mermaid flowchart, rendered SERVER-SIDE (no chart library, no client JS; the platform's diagram lightbox provides zoom/download). Each row is one EDGE; columns declared by name: `from` / `to` (required — the edge's node labels), optional `edge_label` (annotation on the arrow, e.g. a runs count) and `status` (accents the row's TARGET node: fail/error red, warn amber). Presentation fields: `direction` (LR default, TB/TD/RL/BT) and `limit` (edge cap, default 80 — overflow renders a "+M more edges not drawn" foot note, never silently). Nodes are the distinct labels, ids assigned in first-appearance order — ORDER BY the important edges first; the cap keeps the head. First consumer: solidmon.pipeline's wiring map (triggers → pipeline → children lineage). (diagram) |
 | 0.18.0 | 2026-08-11 | Additive (timeline widget, S-2160): new widget `kind: timeline` — one query → Gantt lanes, one lane per `row` value, a true bar per result row spanning `start`→`end` on a continuous time axis, colored by a **canonical status vocabulary** (`ok` / `warn` / `fail` / `running` / `queued` / `cancelled`; the QUERY maps raw system statuses, exactly as for the heatmap). New fields `start` / `end` / `key` (columns, by name) and the blocks `card:` (a declared hover-detail query) + `expand:` (a full nested sub-lane axis + query, itself nestable); reuses `row` / `value` / `limit` / `drilldown`. Two new macros, bound ONLY inside those sub-queries: `{{ key }}` (the hovered bar's `key` value) and `{{ row }}` (the expanded lane's key), both expanding to sanitized SQL literals. A NULL `end` means in-flight (the bar runs to now and keeps its status color); `key` is required exactly when a `card:` is declared, at every `expand:` level. The widget is **system-blind** — it knows lanes, bars, statuses and a window, nothing about the system that produced them. (timeline) |
+| 0.18.1 | 2026-08-11 | PATCH (doc-only, no schema change): §6.1 — macros expand BEFORE the SQL is parsed, so a macro named inside a `--` comment is still a call. A comment written to explain `{{ filter }}` is an argument-less invocation of it and fails to render (found while authoring the first `timeline` consumer, S-2162). Write the macro's name, not its call. No behaviour change. (macro-in-comment) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -387,6 +388,11 @@ which is what keeps both the lint and the LLM-authoring path safe.
 
 `missingkey=error` is set: a reference to an undeclared variable is a hard error,
 not a silent empty string.
+
+**Macros expand before the SQL is parsed, so a macro named inside a `--` comment
+is still a call** — write the macro's *name* there, not its call, or a comment
+explaining `{{ filter }}` becomes an argument-less invocation of it and fails to
+render.
 
 ### 6.2 Macro vocabulary
 
