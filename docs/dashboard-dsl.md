@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.23.0                                             │
+  │  Contract version : 0.24.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.23.0 · Draft · `dsl_version: "0.23"`**
+**Contract version 0.24.0 · Draft · `dsl_version: "0.24"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -165,6 +165,7 @@ Runtime compatibility rule **(planned)**:
 | 0.22.0 | 2026-08-12 | Additive (S-2188): an `expand:` level now receives its whole ANCESTRY, and a chevron can be offered per LANE. New macro **`{{ ancestor N }}`** — a lane above the one being expanded, indexed from the OUTERMOST, so a level at depth *d* has indices `0..d-1` and `{{ ancestor (d-1) }}` is `{{ row }}`; reaching past a level's own ancestry is a register-time error. This is what makes a second level expressible when its lane key is unique only *within* its grandparent: 0.21.2 had to state that `{{ row }}` bound the immediate parent and nothing above it, so a level keyed on a step name matched steps of that name in every pipeline — rows that belong to something else, aligned on the right time axis. A depth-2 query now restates the scope it hangs under (`WHERE run_name = {{ ancestor 0 }} AND activity_name = {{ row }}`). New widget key **`has_children:`** on `kind: timeline` (and on `expand:`), naming a column that says whether THIS lane has sub-lanes: read per row and OR'd across the lane (so it survives a `{{ bucket }}` fold), with NULL / absent / `false` / `0` reading as NO. 0.21.2 also had to state that a chevron was offered per LEVEL, so every lane got one and the childless ones opened an empty note — on an estate whose history predates the underlying edge that is every lane on the wall. Declaring `has_children` on a level with no `expand:` is a register-time error. Additive: both are opt-in, a document naming neither is byte-for-byte unchanged, and `{{ row }}` keeps its meaning exactly. (expand-ancestry) |
 | 0.22.1 | 2026-08-12 | PATCH (doc-only, no schema change): WHICH errors can actually stop a registration (S-2188 review). §8.5 said an `{{ ancestor N }}` past its level was a "register-time error", and §6.2 said the same of `{{ bucket }}` on a widget with no fold. Both are MACRO errors, and macro errors are not on the register path — they are caught by the declare-time lint over a spec's queries (`ValidateSpecQueries`), which a solution's own suite runs, and which S-2176 deliberately keeps OFF the admission path so a macro slip cannot take a whole dashboard (or a whole announced batch) off an estate. For an in-tree solution the distinction is invisible: the suite is the gate. For an external partner it is the whole story — skip the lint and the document registers cleanly, the tile renders, and the sub-lane fails at the click. §9 now states the rule once, where a reader looks for it: only the SCHEMA checks reject a registration. `has_children` on a level with no `expand:`, `unit: auto` + `format:`, and the rest of §9's numbered checks are schema, and genuinely do reject. No contract change: the same documents are valid, the same errors are raised, in the same places they always were — the doc now says where. (enforcement-points) |
 | 0.23.0 | 2026-08-12 | Additive (S-2183 / S-2186): what the un-drilled WIDE view promises. **The lane cap belongs to the widget.** `limit` truncates the lanes the query returned and reports the rest as `+N more lanes`; a query that ALSO caps lanes makes that count structurally zero, so the truncation is real and silent — measured on a live estate, 320 of 360 lanes vanished from an un-drilled wall with nothing on screen saying so. Rank in SQL, truncate in the widget. The cost of over-fetching is usually small because a ranking's dropped lanes are the sparse ones (measured over a 30-day window on a live estate: +11% folded rows on a 74-lane run wall, 3.3× on a 321-lane step wall — ratios, since the absolute counts are that estate's; §8.5 sizes it). New widget key **`lane_order: appearance | time`** on `kind: timeline` (and on `expand:`), because the cut and the layout are two questions: the cut is always the query's row order, and `lane_order` orders only the SURVIVORS — it never changes which lanes survive. Without it a page that wants the failing steps kept AND the steps read in execution order has to give one of them up. Default `appearance` = the previous behaviour. **Bar width is the true duration**, floored in CSS pixels at render rather than server-side as a percentage of an assumed track width — the old floor grew with the viewport (2px intended, 4.6px at 1512, ~11px at 2560) and at a day-wide window flattened every duration under ~4.8 minutes to one width, so a 0-second skipped step and a 1-minute step were pixel-identical and the long pole was unreadable. Presentation only: no query changes, and a zero-length mark stays visible and hittable. Additive: `lane_order` is opt-in and defaults to today; a document that also caps lanes in SQL keeps working exactly as before, silently, which is the thing to go and fix. (honest-overview) |
+| 0.24.0 | 2026-08-12 | Additive (S-2181): new widget key **`superseded:`** on `kind: timeline` (and on `expand:`), naming a boolean column that says THIS bar was replaced by a later execution — a rerun attempt, a re-issued job, a re-delivered batch. Such a bar now PAINTS, ghosted: hatched, inset, behind the mark that replaced it, keeping its own status colour. Read per ROW (not OR'd across the lane as `has_children` is — a lane holds ghosts and live bars side by side and each answers for itself), NULL / absent / `false` / `0` reading as NO; valid at any level with or without an `expand:`; no register check, a misnamed column simply ghosts nothing. The hover title gains ` · superseded` and the legend gains one entry when a ghost is on screen. **It is a second axis, NOT a status**, and that is contract rather than styling: a superseded execution keeps whatever status it had, real estates carry superseded SUCCESSES, and folding the two would break the shared palette (no colour left for "replaced"), the legend (which lists statuses present) and the worst-status fold that `{{ bucket }}` groups and the widget's own merge both apply — where "superseded" has no defensible severity rank. If you fold with `{{ bucket }}`, GROUP BY it: this is the fourth thing a fold must preserve after `count:` / in-flight / identity, and the only one whose absence is invisible, since attempts minutes apart share a bucket at any wide window and folding across them merges a ghost into the mark that replaced it (the widget's own merge is partitioned the same way). Why it exists: a history panel that filters replaced attempts out denies executions that happened, most often the failures somebody is looking for — and the reasoning that leads there ("a rerun would paint twice") is false wherever a rerun is a new record with its own identity. Additive: opt-in, a document naming it is the only one that changes. (superseded-attempts) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -1119,6 +1120,7 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
   count: runs               # optional — bars this row already stands for (see "folding in SQL")
   lane_order: time          # optional — appearance (default) | time; orders the SURVIVING lanes
   has_children: launched    # optional — per-lane chevron: only lanes whose rows say yes expand
+  superseded: superseded    # optional — this bar was replaced by a later one; paints ghosted
   frame: window
   limit: 200                # optional lane cap; overflow reported in the tile foot
   drilldown: { target: adf.pipeline, params: { pipeline: "{row}" } }
@@ -1287,8 +1289,8 @@ NULLs to the widget is not a way of saying "ignore these".
     a card never shows a start and an end while leaving the reader to subtract.
 - **`expand:`** is a full axis in its own right — `row` / `start` / `value`
   required, `end` optional, `key` governed by the same rule as the parent's
-  (required iff the widget declares a `card:`), `count` / `has_children`
-  optional — plus its own `query`, bound to the opened lane via `{{ row }}` and
+  (required iff the widget declares a `card:`), `count` / `has_children` /
+  `superseded` optional — plus its own `query`, bound to the opened lane via `{{ row }}` and
   to everything above it via `{{ ancestor N }}`. Sub-lanes ARE lanes: same bar
   maths, same window, same density budget, same card mechanics. Nesting is
   bounded (5 levels).
@@ -1362,6 +1364,57 @@ expand: { … }
 Without it, "this step launched nothing" and "this step's history predates the
 edge" both render as a chevron opening an empty note — on a wholly imported
 estate that can be every lane on the wall.
+
+**`superseded:` — a bar that was replaced, drawn rather than dropped (0.24.0).**
+Name a boolean column and the widget paints that bar **ghosted**: hatched,
+slightly inset, and behind the mark that replaced it, keeping its own status
+colour. What makes an execution superseded is entirely yours — a rerun attempt,
+a re-issued job, a re-delivered batch. The widget only knows there is a variant
+to draw.
+
+```yaml
+row: run_name
+superseded: superseded      # a boolean/count column on THIS level's query
+```
+
+- Read **per ROW** (unlike `has_children`, which ORs across the lane — a lane
+  holds ghosts and live bars side by side, and each bar answers for itself).
+  NULL / absent / `false` / `0` reads as NO.
+- Absent → nothing is ghosted, so no existing document changes.
+- Valid at any level, with or without an `expand:`, and there is no register
+  check: a misnamed column simply ghosts nothing, exactly as `count:` does.
+- The plain hover title gains ` · superseded`, so the variant survives for a
+  reader who cannot see a hatch.
+- The legend gains one entry, and only when a ghost is on screen.
+
+**It is a SECOND AXIS, not a status, and that is the load-bearing part of this
+contract.** The temptation is to add `superseded` to the status vocabulary
+(§8.5's `ok` / `warn` / `fail` / `running` / `queued` / `cancelled`) and be done.
+Do not: a superseded execution keeps whatever status it *had*. Real estates carry
+superseded **successes** — a run that succeeded and was re-run anyway — and
+collapsing the two axes would lose that outright. It would also break three
+things that read the vocabulary: the shared palette (a colour per status, with
+nothing left to say "replaced"), the legend (which lists statuses present), and
+the worst-status fold that a `{{ bucket }}` group and the widget's own merge both
+apply — where "superseded" has no defensible severity rank at all.
+
+**If you fold with `{{ bucket }}`, GROUP BY the column.** This is the fourth
+thing your `GROUP BY` must preserve, alongside `count:` / in-flight / identity
+above, and it is the one whose absence is invisible: attempts of the same run are
+typically minutes apart, so at any wide window they land in the same bucket, and
+folding across them merges a ghost into the very mark that replaced it. The
+widget's own density merge is partitioned the same way — a ghost never merges
+with a live bar, though ghosts merge with each other — so the two layers agree.
+
+**Why the capability exists.** A history panel that filters superseded attempts
+out is not neutral: it *denies* executions that happened, and it does so most
+often for the failures somebody is looking for. It is also easy to do by accident
+on the reasoning that a re-run would otherwise "paint twice" — which is false
+whenever a re-run is a new record with its own identity, as it usually is. Two
+bars are then two real executions at two real times. If a failure feed elsewhere
+on the page reads the same source without that filter, the two surfaces
+contradict each other on one screen. Ghost the replaced attempt instead: the
+history stays complete and the eye still lands on what is current.
 
 Sub-query failures stay local: a card or expand query that errors renders a muted
 inline note in the hover or lane list, never a failed tile (§9).
