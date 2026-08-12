@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.21.2                                             │
+  │  Contract version : 0.22.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.21.2 · Draft · `dsl_version: "0.21"`**
+**Contract version 0.22.0 · Draft · `dsl_version: "0.22"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -80,7 +80,7 @@ The query substrate (L1 Frame + L2 templating) is **shipped**. The renderer
 resolves the Frame, expands the macro FuncMap per dialect, lints the template,
 and executes — picker changes **do** re-window YAML-backed queries. Implemented:
 all §6.2 macros (`from`/`to`/`timeFilter`/`spanFilter`/`anchor`/`interval`/
-`bucket`/`worstStatus`, `var`/`filter`/`values`, `search`, `key`/`row`), the §5 frame modes, the control-flow lint
+`bucket`/`worstStatus`, `var`/`filter`/`values`, `search`, `key`/`row`/`ancestor`), the §5 frame modes, the control-flow lint
 (§6.1), load-time `Validate` (§9, `infra/dashboard/validate.go`), the catalog
 binding modes incl. `catalog: all` (§4.5), named heatmap axes (§8.3), and
 drill-down (§8.2).
@@ -162,6 +162,7 @@ Runtime compatibility rule **(planned)**:
 | 0.21.0 | 2026-08-11 | Additive (S-2164): fold a widget's own collapse into SQL. Two macros — **`{{ bucket "col" }}`**, the resolution the WIDGET resolved to for the current window (a heatmap's column-axis unit, a timeline's density grid), and **`{{ worstStatus "col" }}`**, the widget's own severity ranking as an aggregate — so `GROUP BY {{ bucket "at" }}, <lane>` produces the marks that were going to be drawn instead of shipping every row to draw them (measured on a 30-day real estate: a run history 155,735 → 17,239 rows, an activity wall 414,792 → 7,002). The bucket is a macro rather than something you write precisely because it follows the picker window; a constant would break every sub-daily preset (0.17.0). Both are opt-in — the widget still runs its own fold and stays the authority on the wall, exactly for a heatmap and closely for a timeline (§8.5) — and both are a register-time ERROR on a widget that has no fold, rather than a grouping invented on the spot. Additive: new widget key **`count:`** on `kind: timeline` (and on `expand:`), naming how many bars a folded row stands for so a merged segment's hover stays honest; absent → one bar per row, so no existing document changes. **Correction, not a change:** `{{ timeGroup "col" }}` has been listed in §6.2 and §1.1 since 0.1.0 and was never implemented — writing it has always been a hard render error. `bucket` is what it was reaching for, done resolution-aware; the `timeGroup` rows are removed rather than deprecated, since nothing could have been written against them. (fold-pushdown) |
 | 0.21.1 | 2026-08-11 | PATCH (S-2176): what an ABSENT status means, stated once. NULL, empty and whitespace in a `value` column all mean "the row exists and nothing graded it", and all fold as **`unknown`** — above `ok`/`queued`/`cancelled`/`running`, below `warn` and `fail`. So a merged timeline segment of eleven `ok` runs and one ungraded one reads `unknown`, not `ok`; one holding a `fail` still reads `fail`. This is the severity order's whole point (an unknown must be visible and must never mask a failure) and it is what the heatmap's own order already said since 0.15.0; the timeline previously let an absent status lose to everything, and `{{ worstStatus }}` previously let it lose by construction, because `arg_max` drops a row whose value argument is NULL BEFORE ranking it. Both now normalise identically, so a folded query and an unfolded one agree — a bug-fix in expansion restoring intended behaviour, hence PATCH: no schema change, no field, no macro, and no document stops working. Also states the distinction a heatmap must never blur (§8.3): a bucket NO row landed in renders EMPTY, a bucket that received ungraded rows renders `unknown` — activity nobody graded is not the same as no activity. Grade in SQL with a total `CASE ... ELSE` if you want an ungraded row to read as something specific. (absent-status) |
 | 0.21.2 | 2026-08-12 | PATCH (doc-only, no schema change): two §8.5 corrections and one stated constraint (S-2169). **The example was wrong about windowing.** Every windowing slot in the `kind: timeline` example used `{{ timeFilter }}` — the widget's own `source.query` AND the `expand:` sub-query — five lines under the 0.20.0 warning that a timeline windowed on an instant loses every bar that outlives the window edge. Both are now `{{ spanFilter }}`. Every in-tree consumer was already correct, so this was purely an external-surface defect, hitting exactly the readers the document exists for. **Nesting is now stated, because it constrains what a second `expand:` level can mean.** `{{ row }}` binds the IMMEDIATE parent lane and nothing above it — there is no ancestor chain — so each level's lane key (plus the page's variables) must identify its rows on its own; a level keyed on a value that is unique only within its grandparent returns rows that belong to something else, aligned on the right time axis and silently wrong. Also states that a chevron is offered per LEVEL, not per lane: a lane whose sub-query returns nothing still shows one. No field, no macro, no schema change, and no existing document stops working. (nested-expand) |
+| 0.22.0 | 2026-08-12 | Additive (S-2188): an `expand:` level now receives its whole ANCESTRY, and a chevron can be offered per LANE. New macro **`{{ ancestor N }}`** — a lane above the one being expanded, indexed from the OUTERMOST, so a level at depth *d* has indices `0..d-1` and `{{ ancestor (d-1) }}` is `{{ row }}`; reaching past a level's own ancestry is a register-time error. This is what makes a second level expressible when its lane key is unique only *within* its grandparent: 0.21.2 had to state that `{{ row }}` bound the immediate parent and nothing above it, so a level keyed on a step name matched steps of that name in every pipeline — rows that belong to something else, aligned on the right time axis. A depth-2 query now restates the scope it hangs under (`WHERE run_name = {{ ancestor 0 }} AND activity_name = {{ row }}`). New widget key **`has_children:`** on `kind: timeline` (and on `expand:`), naming a column that says whether THIS lane has sub-lanes: read per row and OR'd across the lane (so it survives a `{{ bucket }}` fold), with NULL / absent / `false` / `0` reading as NO. 0.21.2 also had to state that a chevron was offered per LEVEL, so every lane got one and the childless ones opened an empty note — on an estate whose history predates the underlying edge that is every lane on the wall. Declaring `has_children` on a level with no `expand:` is a register-time error. Additive: both are opt-in, a document naming neither is byte-for-byte unchanged, and `{{ row }}` keeps its meaning exactly. (expand-ancestry) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -428,6 +429,18 @@ The *names* are the contract; the *expansions* are dialect-local.
 `{{ filter }}` is the workhorse: the **same SQL** works whether the variable is
 single, multi, or all-selected — flipping `multi: true` switches `=` → `IN`
 without touching the query.
+
+**Mark macros** — resolve against the timeline mark a sub-query hangs off
+(§8.5); each is a hard error outside the block that binds it:
+
+| Macro | Intent | Bound in | SQL expansion |
+|---|---|---|---|
+| `{{ key }}` | The hovered bar's identity | `card.query` | `'run-42'` |
+| `{{ row }}` | The lane being expanded | `expand.query` | `'EMEA_Pipeline'` |
+| `{{ ancestor N }}` | A lane ABOVE the one being expanded, indexed from the outermost (v0.22.0) | `expand.query` | `'EMEA_Pipeline'` |
+
+All three expand to sanitized string literals — a mark value is DATA (a run id,
+a lane label), escaped exactly as a `value_type: string` variable is.
 
 #### Instants vs intervals — pick the right window macro (v0.20.0)
 
@@ -1100,6 +1113,7 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
   value: status             # canonical status — map raw values in SQL
   key: external_run_id      # per-bar identity; the {{ key }} the card query receives
   count: runs               # optional — bars this row already stands for (see "folding in SQL")
+  has_children: launched    # optional — per-lane chevron: only lanes whose rows say yes expand
   frame: window
   limit: 200                # optional lane cap; overflow reported in the tile foot
   drilldown: { target: adf.pipeline, params: { pipeline: "{row}" } }
@@ -1117,7 +1131,8 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
       SELECT … FROM activities a JOIN runs r USING (run_id)
       WHERE r.run_name = {{ row }} AND {{ spanFilter "activity_start" "activity_end" }}
     # expand: may nest again — an ExecutePipeline activity opens its child's runs.
-    # {{ row }} binds the IMMEDIATE parent lane only; see "Nesting" below.
+    # {{ row }} binds the lane being expanded; {{ ancestor N }} the lanes above
+    # it, so a deeper level can restate its parent's scope. See "Nesting" below.
   source: { store: ops, query: "SELECT … WHERE {{ spanFilter \"start_time\" \"end_time\" }}" }
 ```
 
@@ -1216,35 +1231,76 @@ NULLs to the widget is not a way of saying "ignore these".
     a card never shows a start and an end while leaving the reader to subtract.
 - **`expand:`** is a full axis in its own right — `row` / `start` / `value`
   required, `end` optional, `key` governed by the same rule as the parent's
-  (required iff the widget declares a `card:`) — plus its own `query`, bound to
-  the opened lane via `{{ row }}`. Sub-lanes ARE lanes: same bar maths, same window, same
-  density budget, same card mechanics. Nesting is bounded (5 levels).
+  (required iff the widget declares a `card:`), `count` / `has_children`
+  optional — plus its own `query`, bound to the opened lane via `{{ row }}` and
+  to everything above it via `{{ ancestor N }}`. Sub-lanes ARE lanes: same bar
+  maths, same window, same density budget, same card mechanics. Nesting is
+  bounded (5 levels).
 
-**Nesting: `{{ row }}` is the IMMEDIATE parent lane, and nothing above it
-(0.21.2).** Each `expand:` level is fetched on its own, identified by one lane
-key plus the dashboard's current variables — so a level-2 query receives the
-level-1 lane it was opened from, and the top-level lane that lane sat under is
-**not** available to it. There is no ancestor chain and no `{{ parentRow }}`.
+**Nesting: an expand level receives its WHOLE ancestry (0.22.0).** `{{ row }}` is
+the lane being expanded — the immediate parent — and `{{ ancestor N }}` is any
+lane above it, indexed from the **outermost**. A level at depth *d* has *d*
+ancestors, so its valid indices are `0 .. d-1`, and `{{ ancestor (d-1) }}` is
+`{{ row }}` itself:
 
-That is a design constraint on what a second level can mean, not a detail:
+```yaml
+expand:                       # level 1 — lanes are steps of the opened pipeline
+  row: activity_name
+  query: |
+    … WHERE r.run_name = {{ row }}
+  expand:                     # level 2 — lanes are the runs that step launched
+    row: run_name
+    query: |
+      …
+      WHERE r.run_name      = {{ ancestor 0 }}   -- the pipeline, two levels up
+        AND a.activity_name = {{ row }}          -- the step directly above
+```
 
-- **Each level's lane key must identify its rows on its own.** If level 1's lanes
-  are step names and step names are only unique *within* a pipeline, then a
-  level-2 query keyed on a step name matches steps of that name in *every*
-  pipeline. It will return rows, aligned on the right time axis, and be silently
-  wrong.
-- **Page scope counts as identity.** A dashboard already scoped to one entity by
-  a variable (`{{ filter "run_name" "pipeline" }}` on a per-pipeline page) gives
-  the sub-query the context the lane key lacks, which is often what makes a
-  second level expressible on a detail page and not on an estate-wide wall.
-- **When the key is not enough, don't ship the level.** Prefer no chevron to a
+Reaching past your own ancestry (`{{ ancestor 1 }}` at depth 1, or any
+`{{ ancestor }}` outside an `expand:`) is a **register-time error**, not an empty
+literal.
+
+**This changes what a second level can mean** — before 0.22.0 a level received
+one lane key and nothing above it, and the rule below was a hard constraint
+rather than a caution:
+
+- **A level's scope must equal its parent lane's.** If level 1's lanes are step
+  names and step names are only unique *within* a pipeline, a level-2 query
+  keyed on the step name alone matches steps of that name in *every* pipeline.
+  It returns rows, aligned on the right time axis, and is silently wrong. The
+  chain is how you restate the scope you are hanging under; use it whenever your
+  lane key is not unique on its own.
+- **Page scope also counts as identity.** A dashboard already scoped to one
+  entity by a variable (`{{ filter "run_name" "pipeline" }}` on a per-pipeline
+  page) gives the sub-query the same context, and both together are ordinary.
+- **When neither is enough, don't ship the level.** Prefer no chevron to a
   chevron over rows that belong to something else.
 
-**A chevron is offered per LEVEL, not per lane.** If a level declares an
-`expand:`, *every* lane at that level gets one, including lanes whose sub-query
-returns nothing — opening those shows an inline "no sub-lanes in this window".
-There is no way to declare "this lane has no children"; if most lanes at a level
-are leaves, weigh that against the value of the expansion.
+**`has_children:` — a chevron per LANE, not per level (0.22.0).** By default a
+level's `expand:` gives *every* lane at that level a chevron, including lanes
+whose sub-query returns nothing; opening one of those shows an inline note.
+Declare `has_children:` (a column name) on the level and the widget offers the
+chevron only where the column says yes:
+
+```yaml
+row: activity_name
+has_children: launched      # a boolean/count column on THIS level's query
+expand: { … }
+```
+
+- The value is read per ROW and **OR'd across the lane** — one row saying yes is
+  enough — so it survives a `{{ bucket }}` fold (`BOOL_OR(...)` in the group).
+- **NULL / absent / `false` / `0` reads as NO.** That is deliberate: a lane the
+  query said nothing about has said nothing worth drawing a chevron for. It is
+  also the honest answer where the underlying edge is missing rather than
+  negative — imported history that never carried it, for instance.
+- Absent → every lane at the level is expandable, exactly as before, so no
+  existing document changes.
+- Declaring it on a level with no `expand:` is a **register-time error**.
+
+Without it, "this step launched nothing" and "this step's history predates the
+edge" both render as a chevron opening an empty note — on a wholly imported
+estate that can be every lane on the wall.
 
 Sub-query failures stay local: a card or expand query that errors renders a muted
 inline note in the hover or lane list, never a failed tile (§9).
@@ -1292,7 +1348,14 @@ panic-at-register) and the template is linted at render time
    `start` + `value` + `query`) at every nesting level, bounded at 5. Column
    *names* are checked for presence, not against the query's result set — a
    query is opaque to the validator, so a misspelt column degrades to an empty
-   lane at render, as for every other kind.
+   lane at render, as for every other kind. `has_children:` is rejected on a
+   level with no `expand:` (0.22.0).
+8. **Expand ancestry** *(declare)* — an `expand:` level naming
+   `{{ ancestor N }}` past its own depth is an error, caught when the author
+   builds their solution: each level is rendered against a chain of exactly its
+   own depth, so the macro's range check *is* the rule (0.22.0). Like every
+   other macro check this is a declare-time lint over the spec's queries, not an
+   admission gate on the announce path.
 
 Errors render as an inline error tile inside the cell; one failed widget never
 kills the dashboard (per editor doc §11). A timeline **sub-query** (card /
