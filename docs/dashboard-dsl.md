@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.22.1                                             │
+  │  Contract version : 0.23.0                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.22.1 · Draft · `dsl_version: "0.22"`**
+**Contract version 0.23.0 · Draft · `dsl_version: "0.23"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -164,6 +164,7 @@ Runtime compatibility rule **(planned)**:
 | 0.21.2 | 2026-08-12 | PATCH (doc-only, no schema change): two §8.5 corrections and one stated constraint (S-2169). **The example was wrong about windowing.** Every windowing slot in the `kind: timeline` example used `{{ timeFilter }}` — the widget's own `source.query` AND the `expand:` sub-query — five lines under the 0.20.0 warning that a timeline windowed on an instant loses every bar that outlives the window edge. Both are now `{{ spanFilter }}`. Every in-tree consumer was already correct, so this was purely an external-surface defect, hitting exactly the readers the document exists for. **Nesting is now stated, because it constrains what a second `expand:` level can mean.** `{{ row }}` binds the IMMEDIATE parent lane and nothing above it — there is no ancestor chain — so each level's lane key (plus the page's variables) must identify its rows on its own; a level keyed on a value that is unique only within its grandparent returns rows that belong to something else, aligned on the right time axis and silently wrong. Also states that a chevron is offered per LEVEL, not per lane: a lane whose sub-query returns nothing still shows one. No field, no macro, no schema change, and no existing document stops working. (nested-expand) |
 | 0.22.0 | 2026-08-12 | Additive (S-2188): an `expand:` level now receives its whole ANCESTRY, and a chevron can be offered per LANE. New macro **`{{ ancestor N }}`** — a lane above the one being expanded, indexed from the OUTERMOST, so a level at depth *d* has indices `0..d-1` and `{{ ancestor (d-1) }}` is `{{ row }}`; reaching past a level's own ancestry is a register-time error. This is what makes a second level expressible when its lane key is unique only *within* its grandparent: 0.21.2 had to state that `{{ row }}` bound the immediate parent and nothing above it, so a level keyed on a step name matched steps of that name in every pipeline — rows that belong to something else, aligned on the right time axis. A depth-2 query now restates the scope it hangs under (`WHERE run_name = {{ ancestor 0 }} AND activity_name = {{ row }}`). New widget key **`has_children:`** on `kind: timeline` (and on `expand:`), naming a column that says whether THIS lane has sub-lanes: read per row and OR'd across the lane (so it survives a `{{ bucket }}` fold), with NULL / absent / `false` / `0` reading as NO. 0.21.2 also had to state that a chevron was offered per LEVEL, so every lane got one and the childless ones opened an empty note — on an estate whose history predates the underlying edge that is every lane on the wall. Declaring `has_children` on a level with no `expand:` is a register-time error. Additive: both are opt-in, a document naming neither is byte-for-byte unchanged, and `{{ row }}` keeps its meaning exactly. (expand-ancestry) |
 | 0.22.1 | 2026-08-12 | PATCH (doc-only, no schema change): WHICH errors can actually stop a registration (S-2188 review). §8.5 said an `{{ ancestor N }}` past its level was a "register-time error", and §6.2 said the same of `{{ bucket }}` on a widget with no fold. Both are MACRO errors, and macro errors are not on the register path — they are caught by the declare-time lint over a spec's queries (`ValidateSpecQueries`), which a solution's own suite runs, and which S-2176 deliberately keeps OFF the admission path so a macro slip cannot take a whole dashboard (or a whole announced batch) off an estate. For an in-tree solution the distinction is invisible: the suite is the gate. For an external partner it is the whole story — skip the lint and the document registers cleanly, the tile renders, and the sub-lane fails at the click. §9 now states the rule once, where a reader looks for it: only the SCHEMA checks reject a registration. `has_children` on a level with no `expand:`, `unit: auto` + `format:`, and the rest of §9's numbered checks are schema, and genuinely do reject. No contract change: the same documents are valid, the same errors are raised, in the same places they always were — the doc now says where. (enforcement-points) |
+| 0.23.0 | 2026-08-12 | Additive (S-2183 / S-2186): what the un-drilled WIDE view promises. **The lane cap belongs to the widget.** `limit` truncates the lanes the query returned and reports the rest as `+N more lanes`; a query that ALSO caps lanes makes that count structurally zero, so the truncation is real and silent — measured on a live estate, 320 of 360 lanes vanished from an un-drilled wall with nothing on screen saying so. Rank in SQL, truncate in the widget. The cost of over-fetching is usually small because a ranking's dropped lanes are the sparse ones (measured, 30-day window: a run wall 4,124 → 4,564 folded rows, +11%; an estate-wide step wall 4,119 → 13,662, 3.3×). New widget key **`lane_order: appearance | time`** on `kind: timeline` (and on `expand:`), because the cut and the layout are two questions: the cut is always the query's row order, and `lane_order` orders only the SURVIVORS — it never changes which lanes survive. Without it a page that wants the failing steps kept AND the steps read in execution order has to give one of them up. Default `appearance` = the previous behaviour. **Bar width is the true duration**, floored in CSS pixels at render rather than server-side as a percentage of an assumed track width — the old floor grew with the viewport (2px intended, 4.6px at 1512, ~11px at 2560) and at a day-wide window flattened every duration under ~4.8 minutes to one width, so a 0-second skipped step and a 1-minute step were pixel-identical and the long pole was unreadable. Presentation only: no query changes, and a zero-length mark stays visible and hittable. Additive: `lane_order` is opt-in and defaults to today; a document that also caps lanes in SQL keeps working exactly as before, silently, which is the thing to go and fix. (honest-overview) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -1116,6 +1117,7 @@ runs today and Databricks jobs, webMethods flows or Kafka consumer lag next.
   value: status             # canonical status — map raw values in SQL
   key: external_run_id      # per-bar identity; the {{ key }} the card query receives
   count: runs               # optional — bars this row already stands for (see "folding in SQL")
+  lane_order: time          # optional — appearance (default) | time; orders the SURVIVING lanes
   has_children: launched    # optional — per-lane chevron: only lanes whose rows say yes expand
   frame: window
   limit: 200                # optional lane cap; overflow reported in the tile foot
@@ -1176,6 +1178,15 @@ NULLs to the widget is not a way of saying "ignore these".
   inventing a start would draw a run that never happened.
 - **The window is the picker window**, not the data extent: gaps stay visible.
   Bars straddling an edge are clamped; bars wholly outside are not rendered.
+- **Bar width is the DURATION (0.23.0).** A bar's width is the true span of what
+  it stands for, at every zoom, and the "a very short run must stay visible"
+  floor is applied in CSS pixels at render — so it is a floor of a couple of
+  pixels whatever the screen, and the widths above it still order by duration.
+  (It was previously floored server-side as a percentage of an assumed track
+  width, which made the floor grow with the viewport and, at a day-wide window,
+  rendered every duration under a few minutes at one identical width. "Which
+  lane is the long pole" was unanswerable at exactly the zoom that asks it.) A
+  zero-length mark — a skipped step — is honestly zero and still hittable.
 - **Density budget.** Bar geometry is computed as a percentage of the window,
   and the projection merges same-lane runs that **start** within a few pixels of
   each other — adjacent or **overlapping** — into one segment, colored by the
@@ -1210,6 +1221,45 @@ NULLs to the widget is not a way of saying "ignore these".
 - **Vertical budget.** Lanes have a minimum height and the widget body a maximum;
   many lanes scroll (the time axis stays visible) rather than shrinking lanes to
   fit. `limit` caps the lane count and any drop is reported, never silent.
+- **The lane cap belongs to the WIDGET, not to your SQL (0.23.0).** `limit`
+  truncates the lanes the query returned and reports the rest as `+N more
+  lanes` in the tile foot. So **do not also cap lanes in the query**: a
+  `LIMIT 40` under a `limit: 40` means the widget receives exactly 40, computes
+  no overflow, and the foot marker never renders — the truncation is real and
+  silent, which is precisely what the marker exists to prevent. Rank in SQL,
+  truncate in the widget:
+
+  ```sql
+  -- ranks, does NOT cut: the widget's limit: is the cut
+  top AS (SELECT lane, COUNT(*) FILTER (WHERE status='fail') AS fails,
+                 COUNT(*) AS n FROM src GROUP BY lane)
+  …
+  ORDER BY lane_fails DESC, lane_n DESC, lane, bar_start
+  ```
+
+  The cost is real and worth sizing: every lane in the window reaches the
+  platform. It is usually small, because the lanes a ranking drops are by
+  construction the sparse ones — measured on a live ADF estate at a 30-day
+  window, a run wall went 4,124 → 4,564 folded rows (+11%) for 74 lanes, and an
+  estate-wide step wall 4,119 → 13,662 (3.3×) for 321. Fold with `{{ bucket }}`
+  (above) and that is the shape of the bill; without the fold it is the raw row
+  count, and the trade may not be worth it.
+- **`lane_order:` — which lanes survive, and how they READ, are two questions
+  (0.23.0).** The cut is always the query's **row order**, so an `ORDER BY` that
+  ranks is what keeps the lanes worth keeping. `lane_order` then lays the
+  SURVIVORS out:
+
+  | value | lane order |
+  |---|---|
+  | `appearance` (default) | the query's row order — ranking and layout are the same thing |
+  | `time` | earliest bar first, so the wall reads as a **waterfall** |
+
+  It **never changes which lanes survive**. That separation is the point: a step
+  timeline wants to keep the failing and busy steps *and* read in execution
+  order, and one `ORDER BY` cannot say both — cut chronologically and the
+  failures quietly drop out of the overview; lay out by rank and the steps stop
+  reading as a sequence. An estate wall that wants its lanes read in the order
+  it wants them kept needs no `lane_order` at all.
 - **`card:`** is a declared query, not a registered handler — a solution stays
   pure YAML. Its FIRST row renders (a query returning several rows for one key
   is an authoring bug the card will not paper over); without a `card:` a bar
@@ -1368,7 +1418,10 @@ The checks:
    *names* are checked for presence, not against the query's result set — a
    query is opaque to the validator, so a misspelt column degrades to an empty
    lane at render, as for every other kind. `has_children:` is rejected on a
-   level with no `expand:` (0.22.0).
+   level with no `expand:` (0.22.0), and `lane_order:` against its closed
+   vocabulary `appearance | time` (0.23.0) — a near-miss must not fall through
+   as the default, since the field exists precisely because a page's layout
+   deliberately is not its `ORDER BY`.
 8. **Expand ancestry** *(declare)* — an `expand:` level naming
    `{{ ancestor N }}` past its own depth is an error, caught when the author
    builds their solution: each level is rendered against a chain of exactly its
