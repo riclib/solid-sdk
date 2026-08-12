@@ -2,7 +2,7 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Dashboard DSL — Query & Widget Contract                               │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 0.22.0                                             │
+  │  Contract version : 0.22.1                                             │
   │  Status           : DRAFT — contract not yet frozen (pre-1.0)          │
   │  Stability         : unstable; minor versions may break (see §2)       │
   │  Surface           : external — authored by humans, the editor, and    │
@@ -17,7 +17,7 @@
 
 # Dashboard DSL — Query & Widget Contract
 
-**Contract version 0.22.0 · Draft · `dsl_version: "0.22"`**
+**Contract version 0.22.1 · Draft · `dsl_version: "0.22"`**
 
 This is the **first external-contract document** (born in the platform repo’s `docs/sdk/`, now homed here). The DSL is a
 surface third parties author against — so it carries a version number and a
@@ -163,6 +163,7 @@ Runtime compatibility rule **(planned)**:
 | 0.21.1 | 2026-08-11 | PATCH (S-2176): what an ABSENT status means, stated once. NULL, empty and whitespace in a `value` column all mean "the row exists and nothing graded it", and all fold as **`unknown`** — above `ok`/`queued`/`cancelled`/`running`, below `warn` and `fail`. So a merged timeline segment of eleven `ok` runs and one ungraded one reads `unknown`, not `ok`; one holding a `fail` still reads `fail`. This is the severity order's whole point (an unknown must be visible and must never mask a failure) and it is what the heatmap's own order already said since 0.15.0; the timeline previously let an absent status lose to everything, and `{{ worstStatus }}` previously let it lose by construction, because `arg_max` drops a row whose value argument is NULL BEFORE ranking it. Both now normalise identically, so a folded query and an unfolded one agree — a bug-fix in expansion restoring intended behaviour, hence PATCH: no schema change, no field, no macro, and no document stops working. Also states the distinction a heatmap must never blur (§8.3): a bucket NO row landed in renders EMPTY, a bucket that received ungraded rows renders `unknown` — activity nobody graded is not the same as no activity. Grade in SQL with a total `CASE ... ELSE` if you want an ungraded row to read as something specific. (absent-status) |
 | 0.21.2 | 2026-08-12 | PATCH (doc-only, no schema change): two §8.5 corrections and one stated constraint (S-2169). **The example was wrong about windowing.** Every windowing slot in the `kind: timeline` example used `{{ timeFilter }}` — the widget's own `source.query` AND the `expand:` sub-query — five lines under the 0.20.0 warning that a timeline windowed on an instant loses every bar that outlives the window edge. Both are now `{{ spanFilter }}`. Every in-tree consumer was already correct, so this was purely an external-surface defect, hitting exactly the readers the document exists for. **Nesting is now stated, because it constrains what a second `expand:` level can mean.** `{{ row }}` binds the IMMEDIATE parent lane and nothing above it — there is no ancestor chain — so each level's lane key (plus the page's variables) must identify its rows on its own; a level keyed on a value that is unique only within its grandparent returns rows that belong to something else, aligned on the right time axis and silently wrong. Also states that a chevron is offered per LEVEL, not per lane: a lane whose sub-query returns nothing still shows one. No field, no macro, no schema change, and no existing document stops working. (nested-expand) |
 | 0.22.0 | 2026-08-12 | Additive (S-2188): an `expand:` level now receives its whole ANCESTRY, and a chevron can be offered per LANE. New macro **`{{ ancestor N }}`** — a lane above the one being expanded, indexed from the OUTERMOST, so a level at depth *d* has indices `0..d-1` and `{{ ancestor (d-1) }}` is `{{ row }}`; reaching past a level's own ancestry is a register-time error. This is what makes a second level expressible when its lane key is unique only *within* its grandparent: 0.21.2 had to state that `{{ row }}` bound the immediate parent and nothing above it, so a level keyed on a step name matched steps of that name in every pipeline — rows that belong to something else, aligned on the right time axis. A depth-2 query now restates the scope it hangs under (`WHERE run_name = {{ ancestor 0 }} AND activity_name = {{ row }}`). New widget key **`has_children:`** on `kind: timeline` (and on `expand:`), naming a column that says whether THIS lane has sub-lanes: read per row and OR'd across the lane (so it survives a `{{ bucket }}` fold), with NULL / absent / `false` / `0` reading as NO. 0.21.2 also had to state that a chevron was offered per LEVEL, so every lane got one and the childless ones opened an empty note — on an estate whose history predates the underlying edge that is every lane on the wall. Declaring `has_children` on a level with no `expand:` is a register-time error. Additive: both are opt-in, a document naming neither is byte-for-byte unchanged, and `{{ row }}` keeps its meaning exactly. (expand-ancestry) |
+| 0.22.1 | 2026-08-12 | PATCH (doc-only, no schema change): WHICH errors can actually stop a registration (S-2188 review). §8.5 said an `{{ ancestor N }}` past its level was a "register-time error", and §6.2 said the same of `{{ bucket }}` on a widget with no fold. Both are MACRO errors, and macro errors are not on the register path — they are caught by the declare-time lint over a spec's queries (`ValidateSpecQueries`), which a solution's own suite runs, and which S-2176 deliberately keeps OFF the admission path so a macro slip cannot take a whole dashboard (or a whole announced batch) off an estate. For an in-tree solution the distinction is invisible: the suite is the gate. For an external partner it is the whole story — skip the lint and the document registers cleanly, the tile renders, and the sub-lane fails at the click. §9 now states the rule once, where a reader looks for it: only the SCHEMA checks reject a registration. `has_children` on a level with no `expand:`, `unit: auto` + `format:`, and the rest of §9's numbered checks are schema, and genuinely do reject. No contract change: the same documents are valid, the same errors are raised, in the same places they always were — the doc now says where. (enforcement-points) |
 | 0.12.2 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). The substrate is shipped, not "target" — §1.1 + header rewritten; §6.1 lint and §9 load-time validation no longer marked (planned); §10 `Dialect` interface corrected (no `ApplyFrame`; registry is package-local in `widgets`); dead `solutions/internaldemo/*` worked-example paths repointed to `gitstore/solution/internaldemo/` (the moved, renamed files; no `CLAUDE.md`). `dsl_version` enforcement (§2.2) + chained-var cycle detection (§7.4) remain genuinely planned. Added an announce-wire delivery pointer. (correctness-pass) |
 
 ---
@@ -512,7 +513,9 @@ GROUP BY 1, 2
 - **Outside a folding widget they are an error, not a silent expansion.** A
   metric card, a table, or a heatmap whose column axis is `type: category` has no
   resolved bucket, and so does a timeline with no bounded window. `{{ bucket }}`
-  says so at register time rather than grouping on something invented.
+  says so rather than grouping on something invented — as a macro error, on the
+  same footing as `{{ ancestor }}` above: the declare-time lint catches it, the
+  register path does not (§9).
 - **Both take a BARE column identifier**, like every other column-taking macro
   (§6.4). Alias the value you are folding to something other than the output
   column name — `{{ bucket "at_ts" }} AS t` reads cleanly, `{{ bucket "t" }} AS t`
@@ -1257,8 +1260,13 @@ expand:                       # level 1 — lanes are steps of the opened pipeli
 ```
 
 Reaching past your own ancestry (`{{ ancestor 1 }}` at depth 1, or any
-`{{ ancestor }}` outside an `expand:`) is a **register-time error**, not an empty
-literal.
+`{{ ancestor }}` outside an `expand:`) is an error, not an empty literal — but
+**a MACRO error, which is not on the register path** (§9). It is caught when you
+build your solution, by the declare-time lint that renders every query in the
+spec; the platform does not reject the registration. Ship one anyway and the
+dashboard registers, the tile renders, and the sub-lane fails at the click — so
+run that lint in your own suite, the way an in-tree solution does. Contrast
+`has_children` below, which the schema validator rejects at register.
 
 **This changes what a second level can mean** — before 0.22.0 a level received
 one lane key and nothing above it, and the rule below was a hard constraint
@@ -1319,7 +1327,18 @@ segment**.
 
 A document is validated at load/register time (`infra/dashboard/validate.go`,
 panic-at-register) and the template is linted at render time
-(`dsl_template.go`). The split below notes which check runs where:
+(`dsl_template.go`). The split below notes which check runs where, and it is a
+real distinction rather than bookkeeping: **only the SCHEMA checks can stop a
+registration.** Everything about a query's MACROS — an unknown macro, a bad
+column argument, an `{{ ancestor }}` past its level, a `{{ bucket }}` on a
+widget with no fold — is caught by a declare-time lint over the spec's queries
+(`ValidateSpecQueries`), which a solution's own test suite runs. That lint is
+deliberately not an admission gate (S-2176: a refused spec takes the whole
+dashboard, or the whole announced batch, off the estate, and one broken tile
+beside nine working ones is strictly better). So a partner who skips it ships a
+document that registers cleanly and fails at the gesture.
+
+The checks:
 
 1. **Schema** *(load)* — required fields present; `span` ∈ 1..12; one engine per
    source after merge; known `kind` / `frame` / `format`.
