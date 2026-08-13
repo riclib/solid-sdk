@@ -300,3 +300,208 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 		t.Fatalf("decoded artifact must validate: %v", err)
 	}
 }
+
+// labelBoundLake is the S-2212 fixture: an incident stream that is SOURCE data
+// (never workspace-stamped — it carries `team`), a projection bound on the
+// exclusive `team` label, and a case-exhaust stream that IS workspace-stamped
+// at open and binds on workspace identity. The two provenances, side by side
+// in one lake, are the ruling in fixture form.
+func labelBoundLake() contract.LakeArtifact {
+	return contract.LakeArtifact{
+		Name:   "cdl",
+		Source: "cdl-advisory",
+		Streams: []contract.StreamDecl{
+			{
+				Name:       "incidents",
+				Provenance: contract.ProvenanceSource,
+				Columns: []contract.ColumnDecl{
+					{Name: "opened_at", Type: "TIMESTAMP", Role: contract.RoleTime},
+					{Name: "team", Type: "VARCHAR"},
+					{Name: "incident_id", Type: "VARCHAR"},
+					{Name: "src_slice", Type: "VARCHAR"},
+				},
+				Labels: []string{"team"},
+			},
+			{
+				Name:       "cases",
+				Provenance: contract.ProvenanceExhaust,
+				Columns: []contract.ColumnDecl{
+					{Name: "opened_at", Type: "TIMESTAMP", Role: contract.RoleTime},
+					{Name: "workspace", Type: "VARCHAR"},
+					{Name: "case_id", Type: "VARCHAR"},
+					{Name: "src_slice", Type: "VARCHAR"},
+				},
+				Labels: []string{"workspace"},
+			},
+		},
+		ScopeLabels: []contract.ScopeLabelDecl{{
+			Name:        "team",
+			Description: "ServiceNow assignment group; one team is owned by exactly one workspace.",
+			Exclusive:   true,
+		}},
+		Projections: []contract.ProjectionDecl{
+			{Name: "incidents_latest", Stream: "incidents", Kind: contract.ProjectionLatest,
+				KeyColumns: []string{"incident_id"}, TimeColumn: "opened_at", ScopeLabel: "team"},
+			{Name: "all_incidents", Stream: "incidents", Kind: contract.ProjectionCopy, Unscoped: true},
+			{Name: "cases_copy", Stream: "cases", Kind: contract.ProjectionCopy},
+		},
+		Ingests: []contract.IngestDecl{
+			{Stream: "incidents", SourceKind: "test_local", SourcePattern: "inc/*.ndjson"},
+			{Stream: "cases", SourceKind: "test_local", SourcePattern: "cases/*.ndjson"},
+		},
+		Retention: contract.RetentionDecl{Class: contract.RetentionForever},
+		Binding:   contract.LakeBindingSolution,
+	}
+}
+
+func TestLabelBoundLake_ValidFixture(t *testing.T) {
+	if err := labelBoundLake().Validate(); err != nil {
+		t.Fatalf("valid label-bound fixture rejected: %v", err)
+	}
+}
+
+// TestLabelScopedBinding_Rejects pins the structural half of the label-binding
+// contract — the part the SDK can check without the platform's claim config.
+func TestLabelScopedBinding_Rejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*contract.LakeArtifact)
+		wantSub string
+	}{
+		{"scope label workspace", func(a *contract.LakeArtifact) {
+			a.ScopeLabels = append(a.ScopeLabels, contract.ScopeLabelDecl{Name: "workspace"})
+		}, "reserved identity label"},
+		{"duplicate scope label", func(a *contract.LakeArtifact) {
+			a.ScopeLabels = append(a.ScopeLabels, contract.ScopeLabelDecl{Name: "team"})
+		}, "duplicate scope label"},
+		{"scope label not an identifier", func(a *contract.LakeArtifact) {
+			a.ScopeLabels[0].Name = "team-name"
+		}, "not a valid identifier"},
+		{"scope label no stream emits it", func(a *contract.LakeArtifact) {
+			a.ScopeLabels = append(a.ScopeLabels, contract.ScopeLabelDecl{Name: "region"})
+		}, "not emitted by any stream"},
+		{"projection binds an undeclared scope label", func(a *contract.LakeArtifact) {
+			a.ScopeLabels = nil
+		}, "does not declare in scope_labels"},
+		{"projection scope label not emitted by its stream", func(a *contract.LakeArtifact) {
+			a.Projections[2].ScopeLabel = "team" // cases does not carry team
+		}, "does not emit it"},
+		{"scope label on an unscoped projection", func(a *contract.LakeArtifact) {
+			a.Projections[1].ScopeLabel = "team"
+		}, "binds ONCE, label-less"},
+		{"workspace-identity bind on a source stream", func(a *contract.LakeArtifact) {
+			a.Projections[0].ScopeLabel = "" // incidents has no workspace column
+		}, "never workspace-stamped"},
+		{"source stream carries workspace", func(a *contract.LakeArtifact) {
+			a.Streams[0].Columns = append(a.Streams[0].Columns,
+				contract.ColumnDecl{Name: "workspace", Type: "VARCHAR"})
+		}, "must not declare a \"workspace\" column"},
+		{"product stream carries workspace", func(a *contract.LakeArtifact) {
+			a.Streams[0].Provenance = contract.ProvenanceProduct
+			a.Streams[0].Columns = append(a.Streams[0].Columns,
+				contract.ColumnDecl{Name: "workspace", Type: "VARCHAR"})
+		}, "must not declare a \"workspace\" column"},
+		{"exhaust stream lacks workspace", func(a *contract.LakeArtifact) {
+			a.Streams[1].Columns = a.Streams[1].Columns[:1]
+			a.Streams[1].Columns = append(a.Streams[1].Columns,
+				contract.ColumnDecl{Name: "case_id", Type: "VARCHAR"},
+				contract.ColumnDecl{Name: "src_slice", Type: "VARCHAR"})
+			a.Streams[1].Labels = nil
+			a.Projections[2].Unscoped = true
+		}, "must declare a \"workspace\" column"},
+		{"unknown provenance", func(a *contract.LakeArtifact) {
+			a.Streams[0].Provenance = "derived"
+		}, "unknown provenance"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := labelBoundLake()
+			tc.mutate(&a)
+			err := a.Validate()
+			if err == nil {
+				t.Fatalf("expected rejection, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error %q does not mention %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestProvenanceIsOptional pins backward compatibility: the pre-0.11.0
+// fixture declares no provenance and is validated exactly as it was.
+func TestProvenanceIsOptional(t *testing.T) {
+	a := validLake()
+	for _, s := range a.Streams {
+		if s.Provenance != "" {
+			t.Fatalf("fixture unexpectedly declares provenance")
+		}
+	}
+	if err := a.Validate(); err != nil {
+		t.Fatalf("a lake declaring no provenance must still validate: %v", err)
+	}
+}
+
+// TestValidateExclusiveClaims is the exclusivity law: one value, one owner.
+// The SDK cannot see the claims in an announce — they are platform config —
+// so this is the shared checker both sides run at bind/approval, and the
+// error must name every conflicting value, not just the first.
+func TestValidateExclusiveClaims(t *testing.T) {
+	ok := []contract.LabelClaim{
+		{Workspace: "ws-platforms", Value: "plataformas"},
+		{Workspace: "ws-platforms", Value: "redes"},
+		{Workspace: "ws-apps", Value: "aplicacoes"},
+		{Workspace: "ws-apps", Value: "aplicacoes"}, // idempotent re-claim
+	}
+	if err := contract.ValidateExclusiveClaims("cdl", "team", ok); err != nil {
+		t.Fatalf("disjoint claims rejected: %v", err)
+	}
+	if err := contract.ValidateExclusiveClaims("cdl", "team", nil); err != nil {
+		t.Fatalf("no claims must be legal (nothing bound yet): %v", err)
+	}
+
+	conflicted := append(ok,
+		contract.LabelClaim{Workspace: "ws-apps", Value: "plataformas"},
+		contract.LabelClaim{Workspace: "ws-net", Value: "redes"},
+	)
+	err := contract.ValidateExclusiveClaims("cdl", "team", conflicted)
+	if err == nil {
+		t.Fatalf("two workspaces claiming one team must be refused")
+	}
+	for _, want := range []string{"plataformas", "redes", "ws-apps", "ws-net", "ws-platforms", "exclusive"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q — the operator needs the whole list", err, want)
+		}
+	}
+	// Deterministic: the same input must produce the same message.
+	if err2 := contract.ValidateExclusiveClaims("cdl", "team", conflicted); err2.Error() != err.Error() {
+		t.Fatalf("error text is not deterministic:\n%v\nvs\n%v", err, err2)
+	}
+
+	if err := contract.ValidateExclusiveClaims("cdl", "team", []contract.LabelClaim{{Workspace: "ws", Value: ""}}); err == nil {
+		t.Fatalf("a claim with no value must be refused")
+	}
+}
+
+// TestLabelBindingJSONStable pins the new wire field names.
+func TestLabelBindingJSONStable(t *testing.T) {
+	b, err := json.Marshal(labelBoundLake())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, field := range []string{`"scope_labels"`, `"exclusive"`, `"scope_label"`, `"provenance"`} {
+		if !strings.Contains(string(b), field) {
+			t.Fatalf("wire JSON missing field %s:\n%s", field, b)
+		}
+	}
+	// The pre-0.11.0 fixture must not grow any of them.
+	old, err := json.Marshal(validLake())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, field := range []string{`"scope_labels"`, `"scope_label"`, `"provenance"`} {
+		if strings.Contains(string(old), field) {
+			t.Fatalf("an artifact that declares nothing new must not carry %s:\n%s", field, old)
+		}
+	}
+}

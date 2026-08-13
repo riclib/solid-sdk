@@ -1,8 +1,8 @@
 # LakeArtifact — declaring a lake from a solution
 
-**Contract version:** 0.1.0
+**Contract version:** 0.2.0
 **Status:** DRAFT (pre-1.0 minors can break)
-**Owner ticket:** S-1874 (design: platform repo `docs/design/demos-over-the-lake.md`)
+**Owner ticket:** S-1874 (design: platform repo `docs/design/demos-over-the-lake.md`) · S-2212 (label-scoped binding)
 **Wire type:** `contract.LakeArtifact` (leaf kind `lake`, key `<solution>.lake.<name>`)
 
 A `LakeArtifact` is the one announce-wire artifact that declares a **data
@@ -100,9 +100,13 @@ Rules (all enforced by `Validate`):
   event-time column that drives slices, drains, and retention.
 - `gen`, `payload`, `residual` are reserved and cannot be declared.
 - `Labels` name declared columns usable as scoping labels. `workspace` is the
-  reserved scoping label: any stream feeding a workspace-scoped projection
-  must declare it and label it. Your writer (datagen, exporter) fills it with
-  the owning workspace id per row.
+  reserved one: a stream feeding a projection bound on workspace IDENTITY must
+  declare it and label it, and your writer (datagen, exporter) fills it with
+  the owning workspace id per row. A stream whose rows are not workspace-owned
+  labels a domain column instead (`team`, `region`) and its projections bind on
+  that — see **Label-scoped binding** below.
+- `Provenance` (optional) classifies the rows and decides whether a `workspace`
+  column is legal on them at all — see **Provenance** below.
 
 ## Descriptions are metadata, not comments
 
@@ -235,12 +239,135 @@ promote to declared columns by name.
 
 Demos declare 90 days.
 
-## Binding
+## Binding — the roster
 
-`Binding: contract.TenantBindingSolution` is v1's only value: the bind roster
+`Binding: contract.LakeBindingSolution` is v1's only value: the bind roster
 is the set of workspaces an operator has bound to **your solution**. No
 workspace binds your solution → nothing is bound, and the catalog seed waits
 too (discovery never exceeds the served surface).
+
+The roster says **which workspaces**. The next section says **which rows each
+one sees**.
+
+## Label-scoped binding
+
+By default a projection binds on **workspace identity**: the stream carries a
+`workspace` column, and the platform adds `workspace = '<ws>'` per bind. That
+works when your rows already know which workspace they belong to. Often they
+do not — an incident knows its `team`, and which workspace owns that team is an
+org question, not a data one.
+
+Label-scoped binding is for exactly that case:
+
+```go
+Streams: []contract.StreamDecl{{
+    Name:       "incidents",
+    Provenance: contract.ProvenanceSource,   // never workspace-stamped
+    Columns: []contract.ColumnDecl{
+        {Name: "opened_at",   Type: "TIMESTAMP", Role: contract.RoleTime},
+        {Name: "team",        Type: "VARCHAR"},
+        {Name: "incident_id", Type: "VARCHAR"},
+        {Name: "src_slice",   Type: "VARCHAR"},
+    },
+    Labels: []string{"team"},                // the stream EMITS the label
+}},
+ScopeLabels: []contract.ScopeLabelDecl{{
+    Name:        "team",
+    Description: "ServiceNow assignment group; one team is owned by exactly one workspace.",
+    Exclusive:   true,                       // the exclusivity law, below
+}},
+Projections: []contract.ProjectionDecl{{
+    Name: "incidents_latest", Stream: "incidents", Kind: contract.ProjectionLatest,
+    KeyColumns: []string{"incident_id"}, TimeColumn: "opened_at",
+    ScopeLabel: "team",                      // bind on the label, not on identity
+}},
+```
+
+The values a workspace claims (`team: [payments, billing]`) are **platform
+config**, not part of your announce. They are resolved **at bind time**, and
+three properties follow from that lateness:
+
+- **A reorg is a config change, not a migration.** Move a team to another
+  workspace by editing the claim; the next bind resolves the new owner.
+- **History follows.** Because the rows carry the label and never an owner, the
+  moved team's whole history moves with it — the new owner inherits the
+  operational record and the precedent corpus, without rewriting a landed byte.
+- **The record stays immutable.** Land-time stamping was rejected for exactly
+  this: it bakes today's org chart into an append-only record and puts a config
+  concern in the landing layer.
+
+Rules `Validate` enforces (the platform re-validates independently):
+
+- A declared scope label must be a **column of some stream and listed in that
+  stream's `Labels`** — a label no stream emits binds to nothing.
+- A projection's `ScopeLabel` must be declared in `ScopeLabels` **and** emitted
+  by its own stream. The bind fails closed, so this refuses at publish instead.
+- `workspace` is never declared in `ScopeLabels`: it is the reserved identity
+  label, and a projection binds on it by leaving `ScopeLabel` empty.
+- `ScopeLabel` with `Unscoped` refuses — an unscoped projection binds once,
+  label-less, into the admin engine.
+
+### The exclusivity law
+
+`Exclusive: true` says a value of this label is owned by **exactly one
+workspace per lake**.
+
+Set it whenever visibility implies ownership — which is what a **generative**
+workflow makes true. When a landed row does not merely become *visible* but
+OPENS something (a case, an investigation, a notification) in every workspace
+that can see it, two workspaces claiming `team: payments` do not share a view:
+they each open their own case for the same incident and duplicate the work.
+This is the doctrine family "one writing solution per store", applied to
+labels.
+
+The SDK cannot check ownership — the claims live in platform config, not in
+your artifact. What it does is make the requirement explicit on the wire and
+ship the checker **both sides run**, so a platform refusal and a partner-side
+preflight report the identical conflict:
+
+```go
+err := contract.ValidateExclusiveClaims("cdl", "team", []contract.LabelClaim{
+    {Workspace: "ws-platforms", Value: "plataformas"},
+    {Workspace: "ws-apps",      Value: "plataformas"}, // ← refused, loudly
+})
+```
+
+The platform runs it at **bind/approval** and refuses there; it names every
+conflicting value, not just the first, because the operator fixing a reorg
+wants the whole list.
+
+### The unclaimed edge
+
+A row whose label value **no workspace claims** binds nowhere and generates
+nothing. That is a legal state, not an error — but it must never be a silent
+gap: the platform surfaces it as an **unowned count on the admin screen**, read
+from the lake's own tenant surface (which sees every landed row regardless of
+claims). Nothing is declared here for it; it is the platform's obligation, and
+it is the reason "nobody claims it" is a visible number rather than an absence.
+
+## Provenance — where `workspace` may appear
+
+`Provenance` on a stream is optional (omit it and validation is exactly as
+before), and it decides one thing: whether the rows may carry a `workspace`
+column.
+
+| Provenance | Rows | `workspace` column |
+|---|---|---|
+| `source` | ingested from a system of record (incidents, tickets, telemetry) | **refused** |
+| `product` | derived by your solution (advisories, scores, classifications) | **refused** |
+| `exhaust` | the record of execution (cases opened, invocations, deliveries) | **required** |
+
+The distinction is about what the column would MEAN. On source and product data
+a workspace stamp is a config decision frozen into an immutable record — that is
+what makes a reorg a migration. On execution exhaust the workspace is a **fact
+about what happened**: this ran under that workspace's config, routes and engine.
+It is stamped at open and stays truthfully stamped forever, including after a
+reorg moves the team elsewhere — the moved team's source and product history
+follows the label, and the old case exhaust does not, because it records where it
+executed. (The in-tree conversations tenant stamps for the same reason.)
+
+A lake commonly declares both: `incidents` as `source`, bound on `team`; `cases`
+as `exhaust`, bound on workspace identity.
 
 ## Reserved names
 
@@ -251,3 +378,10 @@ plus DuckDB's own schemas (`main`, `temp`, `system`, `information_schema`,
 foo's unscoped surfaces serve as the `foo_admin` schema). The sets are
 EXPORTED (`contract.ReservedLakeNames`, `contract.ReservedColumns`) as the
 single source of truth the platform re-validates against; additive-only.
+
+## Changelog
+
+| Version | Date | Change |
+|---|---|---|
+| 0.1.0 | 2026-07-08 | Initial contract (S-1874): streams, projections, views, ingests, retention, solution binding. |
+| 0.2.0 | 2026-08-14 | MINOR, additive (S-2212): **label-scoped binding** (`ScopeLabels` + `ProjectionDecl.ScopeLabel`, bind-time resolution), the **exclusivity law** (`ScopeLabelDecl.Exclusive` + the shared `ValidateExclusiveClaims` checker) and the unclaimed edge, and **`StreamDecl.Provenance`** (source/product never workspace-stamped; exhaust always is). Every field is optional: an artifact that declares none of them validates and binds exactly as it did at 0.1.0. |

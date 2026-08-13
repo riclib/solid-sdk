@@ -258,21 +258,8 @@ type PromptArtifact struct {
 	Body        string   `json:"body"` // the prompt text/markdown
 }
 
-// WorkflowArtifact is the leaf payload for an ArtifactWorkflow — an adaptive
-// workflow definition the solution ships. Like a skill it is PURE CONTROL-PLANE
-// CONTENT: a declarative definition the platform parses and runs, with no data
-// access of its own.
-//
-// Body is the workflow definition YAML (the v4 side parses it); a workflow is
-// ~100 B per step, so it sits comfortably under MaxArtifactSize in one KV leaf.
-type WorkflowArtifact struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Source      string   `json:"source,omitempty"` // the solution that ships it
-	Tags        []string `json:"tags,omitempty"`
-	Body        string   `json:"body"` // the workflow definition YAML
-}
+// WorkflowArtifact (the leaf payload for an ArtifactWorkflow) lives in
+// workflow.go, alongside its Kind discriminator and the body-hash identity.
 
 // DashboardArtifact is the leaf payload for an ArtifactDashboard — a dashboard
 // page the solution ships. Like a skill it is PURE CONTROL-PLANE CONTENT: a
