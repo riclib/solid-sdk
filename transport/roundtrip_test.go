@@ -711,3 +711,104 @@ func TestLakeArtifact_RoundTrip(t *testing.T) {
 		t.Fatalf("expected reserved-name publish refusal, got: %v", err)
 	}
 }
+
+// mechanicDefBody is a hostile-by-design def body: comments, trailing spaces,
+// CRLF, a blank line, a tab inside a block scalar, non-ASCII text, an
+// anchor/alias, and no trailing newline. A parse-and-re-emit anywhere on the
+// announce path rewrites at least one of those.
+const mechanicDefBody = "# cdl-advisory-incident\r\n" +
+	"id: cdl-advisory-incident   \n" +
+	"\n" +
+	"defaults: &d\n" +
+	"  model: sonnet\n" +
+	"steps:\n" +
+	"  - id: retrieve_precedent\n" +
+	"    <<: *d\n" +
+	"    retrieve:\n" +
+	"      query: |\n" +
+	"\tSELECT * FROM cdl.incidents\n" +
+	"  - id: assess   # café ☕\n" +
+	"    prompt: \"Weigh the precedent; don't guess.\""
+
+// TestMechanicWorkflow_BodyRoundTripsVerbatim proves the announce path carries
+// a mechanic def's body BYTE FOR BYTE over the real wire (publish → KV →
+// watch → assemble), so the content hash that IS the def's version identity
+// survives the trip. Nothing in the SDK parses the YAML; if that ever changes,
+// this fails and re-announcing an unedited def would mint a phantom version.
+func TestMechanicWorkflow_BodyRoundTripsVerbatim(t *testing.T) {
+	nc := startEmbeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx := context.Background()
+	kv, err := transport.EnsureSolutionsBucket(ctx, js)
+	if err != nil {
+		t.Fatalf("ensure bucket: %v", err)
+	}
+
+	mech := contract.WorkflowArtifact{
+		ID: "cdl-advisory-incident", Name: "CDL Advisory — Incident",
+		Description: "Opens a case per landed incident.", Source: "cdl-advisory",
+		Kind: contract.WorkflowKindMechanic, Body: mechanicDefBody,
+	}
+	wantHash := mech.DefVersion()
+
+	// A pure-skill def rides the same leaf kind with no Kind set — the frozen
+	// zero value — so both grammars announce side by side.
+	skillDef := contract.WorkflowArtifact{
+		ID: "cdl-advisory-weekly", Name: "Weekly Digest",
+		Description: "Runs the weekly skill.", Source: "cdl-advisory",
+		Body: "id: cdl-advisory-weekly\nskill: cdl-weekly\n",
+	}
+
+	if err := transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name: "cdl-advisory", DisplayName: "CDL Advisory",
+		Workflows: []contract.WorkflowArtifact{mech, skillDef},
+	}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	seen := make(chan contract.Solution, 1)
+	if err := transport.WatchSolutions(ctx, kv, func(sol contract.Solution) { seen <- sol }, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	select {
+	case sol := <-seen:
+		if len(sol.Workflows) != 2 {
+			t.Fatalf("expected 2 workflow leaves, got %d", len(sol.Workflows))
+		}
+		var got contract.WorkflowArtifact
+		for _, wf := range sol.Workflows {
+			if wf.ID == "cdl-advisory-incident" {
+				got = wf
+			}
+			if wf.ID == "cdl-advisory-weekly" {
+				if wf.Kind != "" || wf.EffectiveKind() != contract.WorkflowKindSkill {
+					t.Fatalf("pure-skill def gained a kind on the wire: %q", wf.Kind)
+				}
+			}
+		}
+		if got.Kind != contract.WorkflowKindMechanic {
+			t.Fatalf("mechanic kind did not round-trip: %q", got.Kind)
+		}
+		if got.Body != mechanicDefBody {
+			t.Fatalf("body was altered on the wire:\nwant %q\ngot  %q", mechanicDefBody, got.Body)
+		}
+		if got.DefVersion() != wantHash {
+			t.Fatalf("version identity moved: want %s, got %s", wantHash, got.DefVersion())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not observe announced solution within 3s")
+	}
+
+	// Publish-side fail-fast: an unknown grammar never reaches the wire.
+	bad := mech
+	bad.Kind = "pipeline"
+	err = transport.PublishSolution(ctx, kv, transport.SolutionPublish{
+		Name: "cdl-advisory", Workflows: []contract.WorkflowArtifact{bad},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("expected unknown-kind publish refusal, got: %v", err)
+	}
+}

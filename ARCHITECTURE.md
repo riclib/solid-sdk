@@ -39,13 +39,14 @@ contract" and "SDK has two halves" sections.
 
 ```
 contract/   pure wire types — no behavior, no deps beyond stdlib
-  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, PromptArtifact, WorkflowArtifact, DashboardArtifact, Solution (assembled)
+  manifest.go   SolutionManifest (index), ArtifactRef, ToolDescriptor, SkillArtifact, PromptArtifact, DashboardArtifact, Solution (assembled)
+  workflow.go   WorkflowArtifact + WorkflowKind (skill | mechanic) — the def body, verbatim; DefVersion = its content hash
   envelope.go   ScopedIdentity, ToolCallRequest, ToolCallResult   (agent-as-lens tool call)
   subjects.go   key-tree + subject helpers   (subject shape = the authz boundary)
   runnable.go   the runnable wire — platform triggers a solution's long-running job (JetStream work-queue, progress streamed)
   fire.go       the fire wire — the inverse: solution asks the platform to run a workflow/skill in a workspace
   screen.go     the screen wire — ScreenDescriptor (manifest declaration) + the render/submit envelope (ScreenRequest / ScreenContext / ScreenReply)
-  lake.go       LakeArtifact — the lake a solution declares (streams, projections, views, ingests, retention); materialized by the platform on approval
+  lake.go       LakeArtifact — the lake a solution declares (streams, projections, views, ingests, retention, label-scoped binding); materialized by the platform on approval
   storeproxy.go StoreCall types — solution→platform request-reply (incl. the connect op)
 
 transport/  thin nats.go helpers over the contract types
@@ -79,7 +80,7 @@ oversize. Instead a solution publishes a **tree**:
 <name>.tool.<toolName>       one ToolDescriptor per leaf
 <name>.skill.<skillID>       one skill per leaf
 <name>.prompt.<promptID>     one prompt per leaf
-<name>.workflow.<slug>       one workflow per leaf    (Body = workflow definition YAML)
+<name>.workflow.<id>         one workflow per leaf    (Body = the def YAML, verbatim; Kind picks the grammar)
 <name>.dashboard.<pageID>    one dashboard per leaf   (Body = dashboard DSL YAML)
 ```
 
@@ -255,7 +256,11 @@ statement-level attribution.
 - **Lake** — `LakeArtifact` leaves (S-1874) declare a full data
   plane: an append-only lake tenant + wsstore projections + bind-time views +
   the generic FILE-door ingest. Consumed by the platform's announced-tenant
-  boot module; approval gates materialization. See `docs/lake-artifact.md`.
+  boot module; approval gates materialization. Since S-2212 a projection may
+  bind on a declared LABEL (`team`) instead of workspace identity, resolved
+  from config at bind — with the exclusivity law (one workspace per label
+  value, checked by `contract.ValidateExclusiveClaims` on both sides) where
+  visibility implies ownership. See `docs/lake-artifact.md`.
 
 ## Next wires (each lands with a consumer)
 

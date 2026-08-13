@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -72,7 +73,110 @@ type LakeArtifact struct {
 	// ("solution"): the roster is the workspaces bound to the announcing
 	// solution (the S-1864 rule).
 	Binding string `json:"binding"`
+
+	// ScopeLabels declares the NON-workspace labels this lake's projections
+	// may bind on (S-2212). Declaring one here is what makes it usable as a
+	// ProjectionDecl.ScopeLabel; the label values a workspace claims are
+	// platform CONFIG (the workspace's label scope), resolved at BIND time —
+	// never stamped on a landed row. See ScopeLabelDecl.
+	ScopeLabels []ScopeLabelDecl `json:"scope_labels,omitempty"`
 }
+
+// ScopeLabelDecl declares one non-workspace scoping label this lake binds on
+// — the label-scoped binding contract (S-2212, the port of the in-tree
+// `servicenow_inc` behavior).
+//
+// The mechanics: a stream carries the label as an ordinary declared column
+// (`team`, `region`, …) and lists it in StreamDecl.Labels; a projection names
+// it as its ScopeLabel; each workspace's label scope (platform config) says
+// which VALUES of that label it claims; the platform resolves config → values
+// → predicate AT BIND TIME. Three consequences follow, and they are the whole
+// reason binding is late rather than land-time:
+//
+//   - A reorg is a CONFIG CHANGE, not a data migration. Move a team to another
+//     workspace by editing the claim; the next bind resolves the new owner.
+//   - HISTORY FOLLOWS. Because the rows carry the label and never an owner,
+//     the moved team's whole history moves with it — the new owner inherits
+//     the operational record and the precedent corpus, without rewriting a
+//     single landed byte.
+//   - The record stays immutable. Land-time stamping was REJECTED for exactly
+//     this: it would bake today's org chart into an append-only record and put
+//     a config concern in the landing layer.
+//
+// # The exclusivity law
+//
+// Exclusive marks the label as OWNED: a value belongs to exactly ONE workspace
+// per lake. Set it whenever visibility implies ownership — the case a
+// generative workflow creates. When a landed row OPENS something (a case, an
+// investigation, a notification) in every workspace that can see it, two
+// workspaces claiming `team: payments` do not "share a view", they each open
+// their own case for the same incident and duplicate the work. That is the
+// doctrine-family rule (one writing solution per store) applied to labels.
+//
+// The SDK cannot check ownership: the claims live in platform config, not in
+// the artifact. What it CAN do is make the requirement explicit on the wire
+// (this field) and ship the checker both sides run —
+// ValidateExclusiveClaims — so the platform's loud refusal at bind/approval
+// and any partner-side preflight report the identical conflict.
+//
+// The unclaimed edge is the other half of the law and belongs to the platform:
+// a row whose label value NO workspace claims binds nowhere and generates
+// nothing. That must surface as an unowned count on the platform admin screen
+// — never a silent gap. The platform reads it from the lake's own tenant
+// surface (which sees every landed row regardless of claims), so it needs no
+// declaration here.
+type ScopeLabelDecl struct {
+	// Name is the label: a declared column on at least one of this lake's
+	// streams, listed in that stream's Labels. `workspace` is refused — it is
+	// the reserved identity label and needs no declaration (see
+	// WorkspaceLabel).
+	Name string `json:"name"`
+
+	// Description documents what the label means and where its values come
+	// from — read by the operator who configures the claims, so write it for
+	// them ("ServiceNow assignment group; values are the group's short name").
+	Description string `json:"description,omitempty"`
+
+	// Exclusive asserts the ownership law above: each value of this label is
+	// claimed by at most one workspace. Validated loudly by the platform at
+	// bind/approval; ValidateExclusiveClaims is the shared implementation.
+	Exclusive bool `json:"exclusive,omitempty"`
+}
+
+// Provenance classifies where a stream's rows come from, which decides ONE
+// thing: whether the row may carry a `workspace` column (S-2212).
+//
+// Source and product data — incidents, advisories, scores — are NEVER
+// workspace-stamped. They carry their domain labels (`team`) and the org
+// mapping lives only in config, resolved at bind (see ScopeLabelDecl). A
+// workspace column on such a row is a config decision frozen into an immutable
+// record, and it is what makes a reorg a migration.
+//
+// Execution exhaust — case rows, invocation records, run ledgers — IS stamped
+// with the workspace at open, because there the workspace is a FACT ABOUT WHAT
+// HAPPENED: this ran under that workspace's config, routes and engine. It stays
+// truthfully stamped forever, including after a reorg moves the team elsewhere
+// (the moved team's source/product history follows the label; the old case
+// exhaust does not, and should not — it records where it executed). This is the
+// conversations-tenant precedent, which stamps for the same reason.
+//
+// The field is OPTIONAL and its zero value declares nothing: a stream that
+// omits it is validated exactly as before.
+type Provenance string
+
+const (
+	// ProvenanceSource is data ingested from a system of record (incidents,
+	// tickets, telemetry). Must not declare a `workspace` column.
+	ProvenanceSource Provenance = "source"
+	// ProvenanceProduct is data the solution derives from source data
+	// (advisories, scores, classifications). Must not declare a `workspace`
+	// column.
+	ProvenanceProduct Provenance = "product"
+	// ProvenanceExhaust is the record of execution (cases opened, invocations,
+	// deliveries). MUST declare a `workspace` column — the workspace it ran
+	// under is a fact about the row.
+	ProvenanceExhaust Provenance = "exhaust"
+)
 
 // StreamDecl is one lake stream: name plus ordered typed columns. The lake
 // lands one row per envelope record: reserved `gen` first, then these columns
@@ -89,9 +193,17 @@ type StreamDecl struct {
 
 	// Labels name the declared columns that act as scoping labels for
 	// projection binds. `workspace` is the reserved scoping label: a stream
-	// feeding any workspace-scoped (non-Unscoped) projection must declare a
-	// `workspace` column and list it here.
+	// feeding a projection bound on workspace IDENTITY (no ScopeLabel) must
+	// declare a `workspace` column and list it here. A stream feeding a
+	// LABEL-SCOPED projection lists that label instead (see ScopeLabelDecl) —
+	// the fail-closed rule is the same either way: a projection whose stream
+	// does not EMIT the label it is scoped on binds to nothing.
 	Labels []string `json:"labels,omitempty"`
+
+	// Provenance classifies the rows (source / product / exhaust) and decides
+	// whether a `workspace` column is legal on them. Optional; empty declares
+	// nothing and is validated exactly as before. See Provenance.
+	Provenance Provenance `json:"provenance,omitempty"`
 
 	// Residual enables the residual column (unpromoted envelope remainder).
 	Residual bool `json:"residual,omitempty"`
@@ -170,6 +282,18 @@ type ProjectionDecl struct {
 	// projections evict the key.
 	TombstoneCondition   string   `json:"tombstone_condition,omitempty"`
 	TombstoneProjections []string `json:"tombstone_projections,omitempty"`
+
+	// ScopeLabel names the label this projection binds on, instead of
+	// workspace identity (S-2212). Empty — the default and every pre-0.11.0
+	// artifact — means the reserved WorkspaceLabel: the platform adds
+	// `workspace = '<ws>'` and the stream must carry the column. A non-empty
+	// value must be declared in the lake's ScopeLabels AND listed in this
+	// projection's stream Labels; the platform then resolves the values the
+	// workspace claims from config at bind time and adds `<label> IN (…)`.
+	//
+	// Meaningless (and refused) together with Unscoped: an unscoped
+	// projection binds once, label-less, into the admin engine.
+	ScopeLabel string `json:"scope_label,omitempty"`
 
 	// Unscoped binds this projection label-less into the admin engine (a
 	// separate store under the tenant's admin schema, admin workspace only)
@@ -313,6 +437,62 @@ var ReservedColumns = map[string]bool{
 // it in Labels; the platform adds the per-workspace predicate on bind.
 const WorkspaceLabel = "workspace"
 
+// LabelClaim is one workspace's claim on one value of a scope label — the
+// resolved form of the platform's per-workspace label-scope config
+// ({team: [payments, billing]} becomes two claims). It is the input to
+// ValidateExclusiveClaims and exists only for that: the claims themselves are
+// platform config, never part of an announce.
+type LabelClaim struct {
+	Workspace string `json:"workspace"`
+	Value     string `json:"value"`
+}
+
+// ValidateExclusiveClaims enforces the EXCLUSIVITY LAW over a resolved claim
+// set: a value of an exclusive scope label (ScopeLabelDecl.Exclusive) is owned
+// by exactly one workspace per lake. It is the check the platform runs at
+// bind/approval — loudly, refusing the bind — and the reason it lives here is
+// that both sides must refuse the same input with the same words (the
+// ReservedLakeNames precedent). It reads only its arguments: no config, no
+// store, no announce.
+//
+// It reports EVERY conflicting value, in sorted order, because the operator
+// fixing a reorg wants the whole list, not the first one. A value with no
+// claim is not an error here — an unclaimed value is the platform's
+// unowned-count concern (nothing binds, nothing generates, and it must surface
+// on the admin screen rather than vanish), and this function cannot see the
+// data to know the value exists.
+func ValidateExclusiveClaims(lake, label string, claims []LabelClaim) error {
+	owners := map[string][]string{}
+	seen := map[string]map[string]bool{}
+	for _, c := range claims {
+		if c.Workspace == "" || c.Value == "" {
+			return fmt.Errorf("lake %q: label %q: malformed claim (workspace=%q, value=%q) — both are required", lake, label, c.Workspace, c.Value)
+		}
+		if seen[c.Value][c.Workspace] {
+			continue // the same workspace claiming a value twice is idempotent
+		}
+		if seen[c.Value] == nil {
+			seen[c.Value] = map[string]bool{}
+		}
+		seen[c.Value][c.Workspace] = true
+		owners[c.Value] = append(owners[c.Value], c.Workspace)
+	}
+
+	var conflicts []string
+	for value, ws := range owners {
+		if len(ws) > 1 {
+			sort.Strings(ws)
+			conflicts = append(conflicts, fmt.Sprintf("%s=%q claimed by %s", label, value, strings.Join(ws, ", ")))
+		}
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	sort.Strings(conflicts)
+	return fmt.Errorf("lake %q: label %q is exclusive — each value is owned by exactly ONE workspace, but %s. Two workspaces that can both see a row both act on it: a generative workflow opens two cases for one incident. Move the value, do not share it",
+		lake, label, strings.Join(conflicts, "; "))
+}
+
 // Validate checks the declaration's structure: identifiers, reserved names,
 // per-kind projection rules, SQL shape guardrails, explicit retention, and
 // the binding rule. It is the partner-side fail-fast (PublishSolution calls
@@ -326,6 +506,23 @@ func (t LakeArtifact) Validate() error {
 	}
 
 	streams := make(map[string]StreamDecl, len(t.Streams))
+	// Scope labels are resolved before the streams so a stream's validation
+	// can be checked against them, and vice versa (a declared scope label must
+	// be emitted by at least one stream — otherwise it can never bind).
+	scopeLabels := make(map[string]ScopeLabelDecl, len(t.ScopeLabels))
+	for _, sl := range t.ScopeLabels {
+		if !isIdent(sl.Name) {
+			return fmt.Errorf("lake %q: scope label %q is not a valid identifier", t.Name, sl.Name)
+		}
+		if sl.Name == WorkspaceLabel {
+			return fmt.Errorf("lake %q: %q is the reserved identity label and is never declared in scope_labels (a projection binds on it by leaving scope_label empty)", t.Name, WorkspaceLabel)
+		}
+		if _, dup := scopeLabels[sl.Name]; dup {
+			return fmt.Errorf("lake %q: duplicate scope label %q", t.Name, sl.Name)
+		}
+		scopeLabels[sl.Name] = sl
+	}
+
 	// Served-name collision namespace: streams, projections and views all
 	// materialize as tables/views in ONE schema (a copy projection with no
 	// explicit name serves under its stream's name), so the three share one
@@ -342,6 +539,22 @@ func (t LakeArtifact) Validate() error {
 		names[s.Name] = true
 	}
 
+	// Every declared scope label must be EMITTED by at least one stream. A
+	// label no stream carries can only ever bind to nothing (the fail-closed
+	// rule), so declaring it is a typo, not a configuration.
+	for _, sl := range t.ScopeLabels {
+		emitted := false
+		for _, s := range t.Streams {
+			if hasLabel(s, sl.Name) {
+				emitted = true
+				break
+			}
+		}
+		if !emitted {
+			return fmt.Errorf("lake %q: scope label %q is not emitted by any stream (declare it as a column and list it in that stream's labels, or drop it — a label no stream carries binds to nothing)", t.Name, sl.Name)
+		}
+	}
+
 	copies := map[string]ProjectionDecl{}
 	projections := map[string]bool{}
 	for _, p := range t.Projections {
@@ -352,7 +565,7 @@ func (t LakeArtifact) Validate() error {
 	}
 	seenProjections := map[string]bool{}
 	for _, p := range t.Projections {
-		if err := p.validate(t.Name, streams, copies, projections); err != nil {
+		if err := p.validate(t.Name, streams, copies, projections, scopeLabels); err != nil {
 			return err
 		}
 		if seenProjections[p.Name] {
@@ -456,10 +669,29 @@ func (s StreamDecl) validate(tenant string) error {
 			return fmt.Errorf("lake %q: stream %q: label %q is not a declared column", tenant, s.Name, l)
 		}
 	}
+
+	// The provenance rule (S-2212): where `workspace` may appear in the lake.
+	switch s.Provenance {
+	case "":
+		// Undeclared — validated exactly as before this field existed.
+	case ProvenanceSource, ProvenanceProduct:
+		if cols[WorkspaceLabel] {
+			return fmt.Errorf("lake %q: stream %q is %s data and must not declare a %q column — source and product rows carry their domain labels; the org mapping lives in config and resolves at bind (a workspace stamp here freezes today's org chart into an immutable record and makes a reorg a migration)",
+				tenant, s.Name, s.Provenance, WorkspaceLabel)
+		}
+	case ProvenanceExhaust:
+		if !cols[WorkspaceLabel] {
+			return fmt.Errorf("lake %q: stream %q is execution exhaust and must declare a %q column — the workspace a run executed under is a fact about the row, stamped at open and true forever after",
+				tenant, s.Name, WorkspaceLabel)
+		}
+	default:
+		return fmt.Errorf("lake %q: stream %q: unknown provenance %q (known: %q, %q, %q)",
+			tenant, s.Name, s.Provenance, ProvenanceSource, ProvenanceProduct, ProvenanceExhaust)
+	}
 	return nil
 }
 
-func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies map[string]ProjectionDecl, projections map[string]bool) error {
+func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, copies map[string]ProjectionDecl, projections map[string]bool, scopeLabels map[string]ScopeLabelDecl) error {
 	if !isIdent(p.Name) {
 		return fmt.Errorf("lake %q: projection name %q is not a valid identifier", tenant, p.Name)
 	}
@@ -468,10 +700,30 @@ func (p ProjectionDecl) validate(tenant string, streams map[string]StreamDecl, c
 		return fmt.Errorf("lake %q: projection %q references undeclared stream %q", tenant, p.Name, p.Stream)
 	}
 
-	if !p.Unscoped {
-		if !hasLabel(stream, WorkspaceLabel) {
-			return fmt.Errorf("lake %q: projection %q is workspace-scoped but stream %q does not declare the %q label",
-				tenant, p.Name, p.Stream, WorkspaceLabel)
+	if p.Unscoped {
+		if p.ScopeLabel != "" {
+			return fmt.Errorf("lake %q: projection %q sets scope_label %q and unscoped together — an unscoped projection binds ONCE, label-less, into the admin engine",
+				tenant, p.Name, p.ScopeLabel)
+		}
+	} else {
+		// The bind label: the reserved workspace identity by default, or the
+		// declared scope label. Either way the stream must EMIT it — a
+		// projection scoped on a label its rows do not carry fails closed
+		// (binds to nothing), so it is refused here instead.
+		label := p.ScopeLabel
+		if label == "" {
+			label = WorkspaceLabel
+		} else if _, declared := scopeLabels[label]; !declared {
+			return fmt.Errorf("lake %q: projection %q binds on scope label %q, which the lake does not declare in scope_labels",
+				tenant, p.Name, label)
+		}
+		if !hasLabel(stream, label) {
+			if label == WorkspaceLabel {
+				return fmt.Errorf("lake %q: projection %q is workspace-scoped but stream %q does not declare the %q label (source/product streams are never workspace-stamped — declare a scope label and bind on that instead)",
+					tenant, p.Name, p.Stream, WorkspaceLabel)
+			}
+			return fmt.Errorf("lake %q: projection %q binds on scope label %q but stream %q does not emit it (list %q in the stream's labels)",
+				tenant, p.Name, label, p.Stream, label)
 		}
 	}
 

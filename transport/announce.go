@@ -141,6 +141,13 @@ func PublishSolution(ctx context.Context, kv jetstream.KeyValue, p SolutionPubli
 		if wf.ID == "" {
 			return fmt.Errorf("publish %q: workflow with empty id", p.Name)
 		}
+		// Structural fail-fast only (kind + a non-empty body). The def YAML is
+		// opaque HERE by contract — its grammar validator is platform-side,
+		// and the body's content hash is its version identity, so nothing on
+		// this path parses or rewrites it.
+		if err := wf.Validate(); err != nil {
+			return fmt.Errorf("publish %q: %w", p.Name, err)
+		}
 		key := contract.ArtifactKey(p.Name, contract.ArtifactWorkflow, wf.ID)
 		if err := putLeaf(ctx, kv, key, wf); err != nil {
 			return fmt.Errorf("publish %q: workflow %q: %w", p.Name, wf.ID, err)

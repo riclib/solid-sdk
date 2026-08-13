@@ -4,7 +4,8 @@ The kernel of the Solid partner model: wire-contract types + thin NATS/KV
 helpers. Read `README.md` for the why; this is the working guide.
 
 `docs/` holds the external contracts (solution-stores, store-backed-catalogs,
-workflow-defs, dashboard-dsl, incremental-load-pipeline) — **source of truth
+workflow-defs, mechanic-defs, dashboard-dsl, lake-artifact,
+incremental-load-pipeline, screens) — **source of truth
 here** since S-1743; the platform repo's `docs/sdk/` keeps pointer stubs. Bare
 `domains/…` / `infra/…` / `docs/design/…` paths inside those documents refer
 to the platform repo. See `docs/README.md` for the index and editing rule.
@@ -25,6 +26,15 @@ to the platform repo. See `docs/README.md` for the index and editing rule.
 - **Additive-only once a partner forks.** Signatures and JSON shapes freeze the
   day the first partner builds against them. Add fields (optional, `omitempty`),
   never repurpose or remove. This is the reconciliation/versioning contract.
+- **An opaque `Body` is carried VERBATIM — never parse-and-re-emit.** Skill /
+  prompt / workflow / dashboard / catalog / projection / job leaves carry their
+  YAML or markdown as bytes this module does not interpret. For a workflow leaf
+  that is load-bearing rather than stylistic: the content hash of the body IS
+  the def's version identity (`WorkflowArtifact.DefVersion`, the same 12-hex
+  stamp the platform writes as `def_version`), so re-serializing the YAML —
+  which rewrites comments, key order, indentation and the trailing newline —
+  would mint a phantom new version for an unchanged def. If you ever need to
+  READ inside a body here, read a copy; never write one back.
 - **Never expose a primitive that escapes scoping.** No raw `*sql.DB`, no file
   paths, no unscoped connections — only the scoped envelope + typed
   request/result. The DPO promise lives in this rule.

@@ -2,13 +2,13 @@
   ┌──────────────────────────────────────────────────────────────────────┐
   │  Workflow Definitions — Solution YAML Contract                         │
   ├──────────────────────────────────────────────────────────────────────┤
-  │  Contract version : 1.0.1                                              │
+  │  Contract version : 1.0.2                                              │
   │  Status           : SHIPPED — implemented and enforced at boot         │
   │  Stability         : stable; the schema is the enforced subset (§5)    │
   │  Surface           : external — authored by solution authors (humans   │
   │                      and the LLM); third-party solutions write against │
   │                      this.                                             │
-  │  Last updated      : 2026-06-28                                        │
+  │  Last updated      : 2026-08-14                                        │
   │  Owner ticket      : S-1349 (implementation) / S-1350 (this doc)       │
   │  Implements        : domains/workflow/yaml.go                          │
   │                      (RegisterSolutionWorkflowsFromYAML)               │
@@ -19,7 +19,7 @@
 
 # Workflow Definitions — Solution YAML Contract
 
-**Contract version 1.0.1 · Shipped**
+**Contract version 1.0.2 · Shipped**
 
 A **workflow definition** is the named, presentable unit a workspace `Schedule`
 points at: a triggered, anchored conversation that runs ONE named skill over a
@@ -33,6 +33,15 @@ Unlike the dashboard DSL (still pre-1.0), this contract starts at 1.0.0 because
 it is deliberately tiny: the schema is **exactly the subset the engine enforces
 today** (§5), and growth happens by MINOR bumps as interpreters for new blocks
 actually ship.
+
+> **Sibling grammar.** Since `solid-sdk` v0.11.0 the `workflow` leaf kind carries
+> TWO grammars, told apart by `WorkflowArtifact.Kind`: this one
+> (`WorkflowKindSkill`, and the meaning of an EMPTY `Kind` — every leaf announced
+> before the field existed) and the **mechanic def**
+> ([`./mechanic-defs.md`](./mechanic-defs.md), `WorkflowKindMechanic`): a tracked
+> case per landed row, with no agent in its hot path. They are not dialects —
+> separate parsers, separate stores, no shared keys beyond `id`/`description` —
+> and neither loads the other's YAML. Nothing about this contract changes.
 
 > **Delivery (announce wire).** This document specifies the def YAML itself. As of
 > `solid-sdk` v0.3.0 the same YAML also travels as the `Body` of a
@@ -183,6 +192,7 @@ safety. If the schema ever forks incompatibly, MAJOR introduces one.
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-06-10 | Initial contract (S-1349): `id` / `display_name` / `description` / `icon` / `skill` / `activation{schedule, window}` / opaque `goal`. Strict decode. |
+| 1.0.2 | 2026-08-14 | PATCH (doc-only, no schema change): named the sibling mechanic grammar (S-2212) and the `WorkflowArtifact.Kind` discriminator that tells the two apart. An empty `Kind` still means this contract. |
 | 1.0.1 | 2026-06-28 | PATCH (doc-only, no schema change): correctness pass (S-1524). §§1–5 verified accurate. §6 corrected — the goal seam is `pursuit.Service.SetStandingGoalSeed` + `EnsureStandingGoal` via `RegisterDeps.PursuitSvc` (the prior `mustStandingGoalFromDef` was fictional). §7 examples flagged illustrative/out-of-tree (no in-tree solution uses the rung-2 loader yet). Added the S-1457 registered-shape note (§3) and the announce-wire pointer. |
 
 ---

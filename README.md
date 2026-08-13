@@ -209,10 +209,11 @@ toolkit validates against:
 |---|---|---|
 | [`solution-stores.md`](./docs/solution-stores.md) | how your solution's data is declared, stored, served, and governed | DRAFT v0.2 |
 | [`store-backed-catalogs.md`](./docs/store-backed-catalogs.md) | declared-only exposure — the platform serves exactly the surface you declare | SHIPPED 1.0.0 |
-| [`workflow-defs.md`](./docs/workflow-defs.md) | the workflow YAML your solution ships (when to act) | SHIPPED 1.0.1 |
-| [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.14.1 |
+| [`workflow-defs.md`](./docs/workflow-defs.md) | the pure-skill workflow YAML your solution ships (when to act) | SHIPPED 1.0.2 |
+| [`mechanic-defs.md`](./docs/mechanic-defs.md) | the mechanic def YAML — a tracked case per landed row, no agent in the hot path | DRAFT 0.1.0 |
+| [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.24.0 |
 | [`incremental-load-pipeline.md`](./docs/incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
-| [`lake-artifact.md`](./docs/lake-artifact.md) | declaring a lake (streams, projections, views, ingests, retention) from a solution | DRAFT 0.1.0 |
+| [`lake-artifact.md`](./docs/lake-artifact.md) | declaring a lake (streams, projections, views, ingests, retention, label binding) from a solution | DRAFT 0.2.0 |
 | [`screens.md`](./docs/screens.md) | rendering your own configuration screens — you render and validate, the platform persists | DRAFT 0.1.0 |
 
 ## Versions & support
