@@ -213,7 +213,7 @@ toolkit validates against:
 | [`mechanic-defs.md`](./docs/mechanic-defs.md) | the mechanic def YAML — a tracked case per landed row, no agent in the hot path | DRAFT 0.1.0 |
 | [`dashboard-dsl.md`](./docs/dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.24.0 |
 | [`incremental-load-pipeline.md`](./docs/incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
-| [`lake-artifact.md`](./docs/lake-artifact.md) | declaring a lake (streams, projections, views, ingests, retention, label binding) from a solution | DRAFT 0.2.0 |
+| [`lake-artifact.md`](./docs/lake-artifact.md) | declaring a lake (streams, projections, views, ingest doors, retention, label binding) from a solution | DRAFT 0.3.0 |
 | [`screens.md`](./docs/screens.md) | rendering your own configuration screens — you render and validate, the platform persists | DRAFT 0.1.0 |
 
 ## Versions & support

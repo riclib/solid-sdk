@@ -1,8 +1,8 @@
 # LakeArtifact — declaring a lake from a solution
 
-**Contract version:** 0.2.0
+**Contract version:** 0.3.0
 **Status:** DRAFT (pre-1.0 minors can break)
-**Owner ticket:** S-1874 (design: platform repo `docs/design/demos-over-the-lake.md`) · S-2212 (label-scoped binding)
+**Owner ticket:** S-1874 (design: platform repo `docs/design/demos-over-the-lake.md`) · S-2212 (label-scoped binding) · S-2241 (the JetStream door)
 **Wire type:** `contract.LakeArtifact` (leaf kind `lake`, key `<solution>.lake.<name>`)
 
 A `LakeArtifact` is the one announce-wire artifact that declares a **data
@@ -198,16 +198,29 @@ workspace engine. View SQL runs at query time in the reader's session, so it
 must **schema-qualify** the projection tables it reads (`FROM
 <tenant>.<table>`, or `<tenant>_admin.<table>` for unscoped surfaces).
 
-## Ingest — the FILE door
+## Ingest — the write doors
 
-There is **no special ingest API** — and in v1 the FILE door is a lake's
-ONLY write door, so **at least one `Ingests` entry is required** (the
-platform's lake refuses a tenant with no sources). Your writer emits envelope files (NDJSON)
-into a source the platform walks — the same production pipeline the in-tree
-systems use, pointed at your files. Each `Ingests` entry materializes a
-generic FILE-door runnable plus a job seeded **DISABLED** (operator enables)
-— one door per file-fed stream, all typically walking the same configured
-source with per-stream `SourcePattern`s:
+There is **no special ingest API**, and **at least one `Ingests` entry is
+required** — a lake with no write door has no way for a row to arrive, and the
+platform's lake refuses a tenant with no sources. Each entry is one door into
+one stream, and each entry picks its `door`:
+
+| `door` | Arrival unit | Dedup key | Materializes | Right for |
+|---|---|---|---|---|
+| `file` (default) | a file | the file's bytes + slice | a walk runnable + a **DISABLED** job | file-native sources: hourly export blobs, audit drops, datagen trees |
+| `stream` | a message | the producer's `Nats-Msg-Id` | a durable JetStream consumer, live at materialize | sources with no files: API pollers, change feeds, edge agents |
+
+The doors are exclusive **per entry**, not per lake: a lake may feed one stream
+from files and another from the wire. `Validate` refuses a half-declared entry
+(a `subject` beside a `source_pattern`) rather than picking one for you.
+
+### The FILE door
+
+Your writer emits envelope files (NDJSON) into a source the platform walks —
+the same production pipeline the in-tree systems use, pointed at your files.
+Each entry materializes a generic FILE-door runnable plus a job seeded
+**DISABLED** (operator enables) — one door per file-fed stream, all typically
+walking the same configured source with per-stream `SourcePattern`s:
 
 - walk the declared source (`SourceKind` + `SourcePattern`),
 - skip slices younger than the seal margin (`SealMarginMinutes`: 0 = the
@@ -226,6 +239,74 @@ whole point of running a demo on the lake.
 `Envelope`/`EnvelopeRef` (mutually exclusive, both optional) carry an
 envelope schema for promote-time decode; when neither is set, envelope fields
 promote to declared columns by name.
+
+### The STREAM door
+
+```go
+Ingests: []contract.IngestDecl{{
+    Stream:             "incidents",
+    Door:               contract.DoorStream,
+    Subject:            "lake.cdl.incidents",   // must sit under lake.<tenant>.
+    MsgID:              "sys_id:sys_updated_on", // what the producer stamps
+    DedupWindowSeconds: 3600,                    // your re-poll distance
+}},
+```
+
+```json
+{"door": "stream", "stream": "incidents", "subject": "lake.cdl.incidents",
+ "msg_id": "sys_id:sys_updated_on", "dedup_window_seconds": 3600}
+```
+
+Your producer publishes **one record per message**, as a JSON object, on
+`Subject`. The platform binds a durable consumer to exactly that subject,
+batches what it fetches, and lands each batch as **one gen** — acking only
+after the lake write, so a crash between the two redelivers rather than loses.
+Fields promote to the declared columns **by name**; the raw message is kept
+verbatim as the row's `payload`, so the record carries evidence of exactly what
+the source said. `SliceColumn` is stamped with the batch's JetStream sequence
+range (`jsseq:<lo>-<hi>`) — the stream door's spelling of the same
+drain-surviving cursor the file door writes.
+
+There is **no job and nothing for an operator to enable**. A stream door is
+live the moment the tenant materializes, and it lands whatever arrives.
+
+**`Subject` must sit under `lake.<tenant>.`** and name a concrete subject — no
+`*`, no `>`. That is not a naming convention: a subject is a capability, and a
+declaration that could name `stream.>` would read the platform's whole
+conversation record by announcing a lake. The tenant segment is unique per
+estate, so the namespace also keeps two partners apart. The declared subject is
+the address you write your producer against — nothing has to be documented out
+of band.
+
+**Dedup belongs at the source, and `MsgID` is where you say so.** Split what is
+enforced from what is trusted, because this field sits exactly on that line:
+
+- **Enforced by the transport.** JetStream refuses a second message carrying an
+  identity it has already seen within `DedupWindowSeconds`. A re-poll that
+  re-publishes the same record is dropped at publish, before the lake hears
+  about it.
+- **Trusted, never checked.** Nothing parses the header or compares it to the
+  payload. A producer stamping a random uuid per publish gets no dedup and no
+  error either — the window will simply never match.
+
+So `MsgID` is a promise the approving operator can read and the producer's
+author can be held to, not a schema. It is **required** on a stream door: an
+ingest that cannot say what makes a record *the same record* has not decided
+its identity, and the platform cannot decide it for you.
+
+`DedupWindowSeconds` (0 = the platform default, 120s) must cover your source's
+own re-emission distance — a collector re-polling the last hour every five
+minutes needs an hour, not two minutes. Too small silently re-lands; too large
+only costs the server memory. One transport fact the declaration cannot hide: a
+JetStream stream carries **one** duplicate window and the platform puts all of a
+tenant's stream ingests on one stream, so the window applied is the **largest**
+declared across them.
+
+**Why this door exists at all.** A poller that writes files to give itself a
+queue has invented a filesystem cursor it then has to keep correct across
+rewrites, re-walks and retention drains. That is a whole defect class, not a
+style preference. Such a source declares a subject and publishes; the queue is
+JetStream's, and it already works.
 
 ## Retention
 
@@ -384,4 +465,5 @@ single source of truth the platform re-validates against; additive-only.
 | Version | Date | Change |
 |---|---|---|
 | 0.1.0 | 2026-07-08 | Initial contract (S-1874): streams, projections, views, ingests, retention, solution binding. |
+| 0.3.0 | 2026-08-16 | MINOR, additive (S-2241): **the JETSTREAM door**. `IngestDecl` grows `door` (`file` \| `stream`; **empty means `file`**, the frozen pre-0.12.0 meaning), plus the stream-door fields `subject` (namespaced to `lake.<tenant>.`, concrete, no wildcards), `msg_id` (the source-declared message identity the producer stamps as `Nats-Msg-Id` — enforced by the transport's duplicate window, trusted by the platform, and REQUIRED on a stream door) and `dedup_window_seconds`. `Validate` refuses a half-declared entry in either direction and a duplicate subject. A file-door artifact validates and materializes exactly as at 0.2.0 and grows no new JSON fields. |
 | 0.2.0 | 2026-08-14 | MINOR, additive (S-2212): **label-scoped binding** (`ScopeLabels` + `ProjectionDecl.ScopeLabel`, bind-time resolution), the **exclusivity law** (`ScopeLabelDecl.Exclusive` + the shared `ValidateExclusiveClaims` checker) and the unclaimed edge, and **`StreamDecl.Provenance`** (source/product never workspace-stamped; exhaust always is). Every field is optional: an artifact that declares none of them validates and binds exactly as it did at 0.1.0. |

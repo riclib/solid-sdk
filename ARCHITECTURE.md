@@ -255,8 +255,11 @@ statement-level attribution.
   sanitizer stay in the platform by design. See `docs/screens.md`.
 - **Lake** — `LakeArtifact` leaves (S-1874) declare a full data
   plane: an append-only lake tenant + wsstore projections + bind-time views +
-  the generic FILE-door ingest. Consumed by the platform's announced-tenant
-  boot module; approval gates materialization. Since S-2212 a projection may
+  its write doors. Consumed by the platform's announced-tenant
+  boot module; approval gates materialization. Since S-2241 an ingest picks its
+  `door`: the generic FILE walk, or a durable JETSTREAM consumer on a declared
+  `lake.<tenant>.…` subject whose dedup key is the producer's own
+  `Nats-Msg-Id` (dedup at the source, enforced by the transport). Since S-2212 a projection may
   bind on a declared LABEL (`team`) instead of workspace identity, resolved
   from config at bind — with the exclusivity law (one workspace per label
   value, checked by `contract.ValidateExclusiveClaims` on both sides) where

@@ -12,7 +12,7 @@ writes against, and the same documents the toolkit validates against.
 | [`mechanic-defs.md`](./mechanic-defs.md) | the mechanic def YAML — a tracked case per landed row, no agent in the hot path | DRAFT 0.1.0 |
 | [`dashboard-dsl.md`](./dashboard-dsl.md) | dashboard queries + widgets, in YAML (what to watch) | DRAFT 0.24.0 |
 | [`incremental-load-pipeline.md`](./incremental-load-pipeline.md) | fetch → decode → keep for your source data | DRAFT 0.2.0 |
-| [`lake-artifact.md`](./lake-artifact.md) | declaring a lake (streams, projections, views, ingests, retention, label binding) from a solution | DRAFT 0.2.0 |
+| [`lake-artifact.md`](./lake-artifact.md) | declaring a lake (streams, projections, views, ingest doors, retention, label binding) from a solution | DRAFT 0.3.0 |
 | [`screens.md`](./screens.md) | rendering your own configuration screens (the platform persists) | DRAFT 0.1.0 |
 
 Each document carries its own version, stability policy, and owner ticket in

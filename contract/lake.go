@@ -14,9 +14,10 @@ import (
 // one artifact that declares a DATA plane rather than control-plane content:
 // on operator approval the platform materializes it into a lake tenant (an
 // append-only, signed, immutable record), wsstore projections bound per
-// workspace from the solution-binding roster, bind-time views, and (when
-// Ingest is declared) a generic FILE-door ingest runnable plus a seeded,
-// DISABLED job.
+// workspace from the solution-binding roster, bind-time views, and — per
+// declared ingest — either a generic FILE-door walk runnable plus a seeded,
+// DISABLED job, or a durable JETSTREAM consumer on a declared subject
+// (0.12.0).
 //
 // Unlike every other data artifact, the declaration is TYPED rather than an
 // opaque Body blob: the platform enforces these fields at materialization
@@ -55,12 +56,13 @@ type LakeArtifact struct {
 	// platform's engine funnel at bind time.
 	Views []ViewDecl `json:"views,omitempty"`
 
-	// Ingests materialize the generic FILE-door ingest: one runnable + one
-	// seeded DISABLED job PER entry (the operator enables — the S-1852
-	// convention), one entry per stream that lands from files. At least one
-	// is REQUIRED in v1: the FILE door is a lake's only write door, and the
-	// platform's lake refuses a tenant with no sources. (Plural since the
-	// first real consumer: a demo with three streams needs three doors.)
+	// Ingests are the lake's WRITE DOORS — one entry per fed stream, each
+	// choosing its door (see IngestDoor): a FILE walk over a configured
+	// source (one runnable + one seeded DISABLED job per entry, the S-1852
+	// convention) or a STREAM consumer on a declared JetStream subject (live
+	// on materialize; no job, nothing to enable). At least one entry is
+	// REQUIRED: a lake with no write door has no way for a row to arrive, and
+	// the platform's lake refuses a tenant with no sources.
 	Ingests []IngestDecl `json:"ingests,omitempty"`
 
 	// Retention is REQUIRED and always explicit: "forever" must be declared,
@@ -329,34 +331,164 @@ type ViewDecl struct {
 	Unscoped bool `json:"unscoped,omitempty"`
 }
 
-// IngestDecl asks the platform to materialize the generic FILE-door ingest
-// for this tenant: a runnable that walks a declared source, skips unsealed
-// slices (seal margin), dedups landed files by byte hash, and lands one gen
-// per file with the slice cursor as a landing constant — plus a seeded
-// DISABLED job the operator enables.
+// IngestDoor names WHICH write door the platform materializes for one ingest
+// (0.12.0). A lake declares one entry per fed stream, and each entry chooses
+// its door:
+//
+//   - DoorFile — a walk over an operator-configured source's sealed envelope
+//     files. Right for file-NATIVE sources: an exporter that writes one blob
+//     per hour, an audit drop, a datagen tree. The file IS the unit of
+//     arrival, so the file's identity is the dedup key.
+//   - DoorStream — a durable JetStream consumer on a declared subject. Right
+//     for sources with no files at all: an API poller, a change feed, an edge
+//     agent. The MESSAGE is the unit of arrival, so the producer's message
+//     identity is the dedup key (see IngestDecl.MsgID).
+//
+// The distinction is not a preference. A poller that writes files to give
+// itself a queue has invented a filesystem cursor it then has to keep correct
+// across rewrites, re-walks and retention drains — which is a whole defect
+// class (the platform's S-2240). Such a source declares a stream and publishes;
+// the queue is JetStream's, and it already works.
+type IngestDoor string
+
+const (
+	// DoorFile is the FILE door. It is the ZERO value's meaning: an ingest
+	// that declares no door is a file ingest, which is the frozen pre-0.12.0
+	// shape.
+	DoorFile IngestDoor = "file"
+	// DoorStream is the JETSTREAM door: a durable consumer per declared
+	// subject, batching into the lake.
+	DoorStream IngestDoor = "stream"
+)
+
+// DefaultDedupWindowSeconds is the duplicate window the platform applies to a
+// stream ingest that declares none — JetStream's own default, two minutes.
+// See IngestDecl.DedupWindowSeconds for why the number is a source decision.
+const DefaultDedupWindowSeconds = 120
+
+// StreamSubjectPrefix is the NATS subject namespace every declared stream
+// ingest must sit under: `lake.<tenant>.`.
+//
+// The prefix is not decoration — it is the reason a declaration cannot reach
+// anything it does not own. A subject is a capability: a consumer bound to
+// `stream.>` drains the platform's conversation record, and an artifact that
+// could name it would read every workspace's messages by declaring a lake. The
+// tenant segment is unique per estate (a tenant name has exactly one owning
+// solution), so the namespace also keeps two partners' subjects apart.
+func StreamSubjectPrefix(tenant string) string { return "lake." + tenant + "." }
+
+// IngestDecl asks the platform to materialize ONE write door into this
+// tenant's lake.
+//
+// FILE door (the default, Door empty or DoorFile): a runnable that walks a
+// declared source, skips unsealed slices (seal margin), dedups landed files by
+// byte hash, and lands one gen per file with the slice cursor as a landing
+// constant — plus a seeded DISABLED job the operator enables.
+//
+// STREAM door (Door: DoorStream): a durable JetStream consumer on Subject,
+// batching messages into the lake as one gen per batch, ACKING ONLY AFTER the
+// lake write. Each message is ONE record as a JSON object; its fields promote
+// to the declared columns by name, and the raw message is kept verbatim as the
+// row's payload. There is NO job and nothing for an operator to enable — a
+// stream door is live the moment the tenant materializes, and it lands
+// whatever the producer publishes.
+//
+// The two doors are mutually exclusive PER ENTRY, and every field below says
+// which door it belongs to. A lake may declare both kinds (a file-fed
+// reference stream beside a stream-fed event stream); it may not half-declare
+// one entry as both, and Validate refuses that rather than guessing.
 type IngestDecl struct {
-	// Stream is the declared stream files land into.
+	// Stream is the declared LAKE stream this door lands into. (It is not a
+	// JetStream stream name — the transport-side stream is the platform's, and
+	// the only transport name in this declaration is Subject.)
 	Stream string `json:"stream"`
 
 	// Source is the lake landing-source name within the tenant. Default:
 	// the target Stream's name (source names must be unique per tenant).
 	Source string `json:"source,omitempty"`
 
+	// Door selects the write door (see IngestDoor). Empty means DoorFile —
+	// the frozen pre-0.12.0 meaning, so every existing declaration keeps its
+	// exact behaviour.
+	Door IngestDoor `json:"door,omitempty"`
+
 	// SourceKind / SourcePattern bind the platform-side source the runnable
 	// walks (e.g. kind "test_local" with a directory glob). Free-form here;
 	// the platform validates against its registered source kinds.
+	// FILE DOOR ONLY.
 	SourceKind    string `json:"source_kind,omitempty"`
 	SourcePattern string `json:"source_pattern,omitempty"`
 
+	// Subject is the NATS subject this door's producer publishes records on.
+	// STREAM DOOR ONLY, and REQUIRED there.
+	//
+	// It must sit under StreamSubjectPrefix(tenant) — `lake.<tenant>.…` — and
+	// name a concrete subject: no `*`, no `>`. The platform binds a durable
+	// consumer filtered to exactly this subject, so the declaration IS the
+	// address a partner writes its producer against; nothing else has to be
+	// documented out of band.
+	Subject string `json:"subject,omitempty"`
+
+	// MsgID declares WHAT the producer puts in each message's `Nats-Msg-Id`
+	// header — the source's own identity for the record, written as the fields
+	// it is built from (e.g. "sys_id" or "sys_id:sys_updated_on").
+	// STREAM DOOR ONLY, and REQUIRED there.
+	//
+	// BE PRECISE ABOUT WHO ENFORCES WHAT, because this field sits exactly on
+	// that line:
+	//
+	//   - ENFORCED by the transport: JetStream refuses a SECOND message
+	//     carrying an identity it has already seen within the duplicate window
+	//     (DedupWindowSeconds). A re-poll that re-publishes the same record is
+	//     dropped at publish, before the lake ever hears about it. That is the
+	//     whole point of putting dedup at the source: the platform is not
+	//     asked to recognise a duplicate it has no way to define.
+	//   - TRUSTED, never checked: that the VALUE actually identifies the
+	//     record. Nothing here parses the header or compares it to the
+	//     payload. A producer that stamps a random uuid per publish gets no
+	//     dedup at all and no error either — the window will simply never
+	//     match.
+	//
+	// So this field is a PROMISE the operator approving the solution can read
+	// and the producer's author can be held to, not a schema. It is REQUIRED
+	// because a stream ingest that cannot say what makes a record the same
+	// record has not decided its identity yet, and the platform has no way to
+	// decide it for them.
+	MsgID string `json:"msg_id,omitempty"`
+
+	// DedupWindowSeconds is how long the transport remembers a MsgID.
+	// STREAM DOOR ONLY; 0 = the platform default (DefaultDedupWindowSeconds).
+	//
+	// It is a SOURCE decision, which is why it is declared rather than
+	// configured: the window must cover the source's own re-emission distance
+	// — a collector that re-polls the last hour every five minutes needs an
+	// hour, not two minutes — and only the source's author knows that number.
+	// Too small silently re-lands; too large only costs the server memory.
+	//
+	// One transport-level fact the declaration cannot hide: a JetStream stream
+	// carries ONE duplicate window, and the platform puts all of a tenant's
+	// stream ingests on one stream, so the window it applies is the LARGEST
+	// declared across the tenant's stream ingests.
+	DedupWindowSeconds int `json:"dedup_window_seconds,omitempty"`
+
 	// SliceColumn is the declared stream column that carries the landing
 	// slice cursor (the drain-surviving dedup key). Default "src_slice" when
-	// empty; the stream must declare it.
+	// empty; the stream must declare it. BOTH doors stamp it, with their own
+	// vocabulary: the FILE door writes the file's slice identity, the STREAM
+	// door writes the batch's JetStream sequence range (`jsseq:<lo>-<hi>`).
+	//
+	// Both are the same promise — the cursor is IN THE RECORD, so it survives
+	// a drain, a compaction and a restart, and a door can always ask the lake
+	// what it already landed instead of remembering.
 	SliceColumn string `json:"slice_column,omitempty"`
 
 	// Envelope is an inline envelope-schema YAML (the schemas/*.yaml
 	// extends-pattern); EnvelopeRef references a platform-known schema by
 	// name instead. At most one may be set. When neither is set, envelope
 	// fields promote to declared columns by name.
+	// FILE DOOR ONLY in 0.12.0 — the stream door always promotes by name, and
+	// declaring an envelope on one is REFUSED rather than ignored (a field the
+	// platform silently drops is worse than a field it will not accept).
 	Envelope    string `json:"envelope,omitempty"`
 	EnvelopeRef string `json:"envelope_ref,omitempty"`
 
@@ -365,11 +497,12 @@ type IngestDecl struct {
 	// 0 (unset) = the platform default (15); >= 1 = that literal margin;
 	// -1 = the seal gate DISABLED (files land immediately — dev/test_local
 	// sources whose files never grow). A literal 0-minute margin is not
-	// expressible; use 1.
+	// expressible; use 1. FILE DOOR ONLY — a message has no unsealed state.
 	SealMarginMinutes int `json:"seal_margin_minutes,omitempty"`
 
 	// Schedule is the seeded job's cron expression. Default hourly
 	// ("0 * * * *") when empty. The job is always seeded DISABLED.
+	// FILE DOOR ONLY — a stream door seeds no job; it drains continuously.
 	Schedule string `json:"schedule,omitempty"`
 }
 
@@ -380,6 +513,26 @@ func (i IngestDecl) SourceName() string {
 		return i.Source
 	}
 	return i.Stream
+}
+
+// DoorKind resolves the declared door, mapping the empty zero value to
+// DoorFile (the frozen pre-0.12.0 meaning). Read this rather than the field,
+// so "" and "file" can never be handled differently by accident.
+func (i IngestDecl) DoorKind() IngestDoor {
+	if i.Door == "" {
+		return DoorFile
+	}
+	return i.Door
+}
+
+// DedupWindow resolves the stream door's duplicate window in seconds,
+// defaulting an undeclared window to DefaultDedupWindowSeconds. Meaningless on
+// a file ingest (which Validate refuses to let declare one).
+func (i IngestDecl) DedupWindow() int {
+	if i.DedupWindowSeconds > 0 {
+		return i.DedupWindowSeconds
+	}
+	return DefaultDedupWindowSeconds
 }
 
 // RetentionClass enumerates the retention classes.
@@ -591,13 +744,13 @@ func (t LakeArtifact) Validate() error {
 		names[v.Name] = true
 	}
 
-	// v1: the FILE door is a lake's ONLY write door, and the platform's lake
-	// refuses a tenant with no sources — so at least one ingest is required.
-	// (A future wire-fed lake kind would RELAX this additively.)
+	// An ingest is a lake's write door, and the platform's lake refuses a
+	// tenant with no sources — so at least one is required, of either kind.
 	if len(t.Ingests) == 0 {
-		return fmt.Errorf("lake %q: at least one ingest required (v1: the FILE door is the only write door)", t.Name)
+		return fmt.Errorf("lake %q: at least one ingest required — a lake with no write door has no way for a row to arrive (declare a %q or %q door)", t.Name, DoorFile, DoorStream)
 	}
 	ingestSources := map[string]bool{}
+	ingestSubjects := map[string]bool{}
 	for _, ing := range t.Ingests {
 		if err := ing.validate(t.Name, streams); err != nil {
 			return err
@@ -607,6 +760,16 @@ func (t LakeArtifact) Validate() error {
 			return fmt.Errorf("lake %q: duplicate ingest source %q", t.Name, src)
 		}
 		ingestSources[src] = true
+		// Two doors on one subject would bind two durable consumers to the
+		// same messages and land every record twice, under two sources — a
+		// duplication the lake cannot see, because the two batches are
+		// genuinely different landings.
+		if ing.DoorKind() == DoorStream {
+			if ingestSubjects[ing.Subject] {
+				return fmt.Errorf("lake %q: duplicate ingest subject %q — two stream doors on one subject land every record twice", t.Name, ing.Subject)
+			}
+			ingestSubjects[ing.Subject] = true
+		}
 	}
 
 	switch t.Retention.Class {
@@ -874,8 +1037,74 @@ func (i IngestDecl) validate(tenant string, streams map[string]StreamDecl) error
 	if i.Envelope != "" && i.EnvelopeRef != "" {
 		return fmt.Errorf("lake %q: ingest declares both envelope and envelope_ref", tenant)
 	}
-	if i.SealMarginMinutes < -1 {
-		return fmt.Errorf("lake %q: ingest seal_margin_minutes must be -1 (gate disabled), 0 (default) or >= 1", tenant)
+
+	// THE DOOR SPLIT (0.12.0). Each door owns a set of fields, and a field
+	// belonging to the OTHER door is refused rather than ignored — an ingest
+	// carrying both a source_pattern and a subject has not chosen a door, and
+	// the platform must never pick one for it (whichever it picked, the author
+	// would have half a working ingest and no error to read).
+	switch i.DoorKind() {
+	case DoorFile:
+		if i.Subject != "" || i.MsgID != "" || i.DedupWindowSeconds != 0 {
+			return fmt.Errorf("lake %q: ingest into stream %q is a FILE door but declares stream-door fields (subject/msg_id/dedup_window_seconds) — set door: %q to use them, or drop them",
+				tenant, i.Stream, DoorStream)
+		}
+		if i.SealMarginMinutes < -1 {
+			return fmt.Errorf("lake %q: ingest seal_margin_minutes must be -1 (gate disabled), 0 (default) or >= 1", tenant)
+		}
+	case DoorStream:
+		if i.SourceKind != "" || i.SourcePattern != "" || i.SealMarginMinutes != 0 || i.Schedule != "" {
+			return fmt.Errorf("lake %q: ingest into stream %q is a STREAM door but declares file-door fields (source_kind/source_pattern/seal_margin_minutes/schedule) — a stream door walks nothing, seals nothing and seeds no job; drop them or set door: %q",
+				tenant, i.Stream, DoorFile)
+		}
+		if i.Envelope != "" || i.EnvelopeRef != "" {
+			return fmt.Errorf("lake %q: ingest into stream %q declares an envelope on a STREAM door — the stream door promotes each message's JSON fields to the declared columns BY NAME (0.12.0); an envelope schema is a file-door concern",
+				tenant, i.Stream)
+		}
+		if i.MsgID == "" {
+			return fmt.Errorf("lake %q: ingest into stream %q is a STREAM door and must declare msg_id — the source's own identity for a record, which the producer sets as the `Nats-Msg-Id` header and the transport dedups on within the duplicate window. The platform TRUSTS the value and never parses it, so an undeclared identity means no dedup at all",
+				tenant, i.Stream)
+		}
+		if err := validStreamSubject(tenant, i.Subject); err != nil {
+			return fmt.Errorf("lake %q: ingest into stream %q: %w", tenant, i.Stream, err)
+		}
+		if i.DedupWindowSeconds < 0 {
+			return fmt.Errorf("lake %q: ingest into stream %q: dedup_window_seconds must be 0 (the platform default of %ds) or positive",
+				tenant, i.Stream, DefaultDedupWindowSeconds)
+		}
+	default:
+		return fmt.Errorf("lake %q: ingest into stream %q: unknown door %q (known: %q, %q; empty means %q)",
+			tenant, i.Stream, i.Door, DoorFile, DoorStream, DoorFile)
+	}
+	return nil
+}
+
+// validStreamSubject enforces the stream door's subject rule: a concrete
+// subject (no wildcards) inside this tenant's own namespace. See
+// StreamSubjectPrefix for why the namespace is the security half.
+func validStreamSubject(tenant, subject string) error {
+	if subject == "" {
+		return fmt.Errorf("a STREAM door must declare a subject (the address its producer publishes on), under %q", StreamSubjectPrefix(tenant))
+	}
+	prefix := StreamSubjectPrefix(tenant)
+	if !strings.HasPrefix(subject, prefix) {
+		return fmt.Errorf("subject %q is outside this lake's namespace — a declared stream subject must start with %q, which is what stops a declaration binding a consumer to a subject it does not own",
+			subject, prefix)
+	}
+	rest := subject[len(prefix):]
+	if rest == "" {
+		return fmt.Errorf("subject %q is the bare namespace prefix — name a concrete subject beneath it (e.g. %s%s)", subject, prefix, "records")
+	}
+	for _, tok := range strings.Split(subject, ".") {
+		if tok == "" {
+			return fmt.Errorf("subject %q has an empty token", subject)
+		}
+		if tok == "*" || tok == ">" {
+			return fmt.Errorf("subject %q contains the wildcard %q — a declared subject is a concrete address, because it is both the consumer's filter and the address the producer is written against", subject, tok)
+		}
+		if strings.ContainsAny(tok, " \t\r\n") {
+			return fmt.Errorf("subject %q contains whitespace", subject)
+		}
 	}
 	return nil
 }
